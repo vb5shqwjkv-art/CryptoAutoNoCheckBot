@@ -1,5 +1,6 @@
 print("BOT PARTITO")
-import os
+print("CONNESSIONE A KRAKEN...")
+print("BOT IN ESECUZIONE...)import os
 import time
 import ccxt
 import pandas as pd
