@@ -2,4 +2,3 @@ ccxt
 pandas
 numpy
 ta
-python-telegram-bot
