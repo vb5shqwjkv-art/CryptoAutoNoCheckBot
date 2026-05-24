@@ -17,7 +17,7 @@ exchange = ccxt.kraken({
     'secret': KRAKEN_SECRET,
     'enableRateLimit': True,
 })
-balance = exchange.feth_balance()
+balance = exchange.fethBalance()
 print (balance)
 
 SYMBOL = 'BTC/EUR'
