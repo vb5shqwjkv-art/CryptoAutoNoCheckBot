@@ -1,5 +1,7 @@
 print("BOT PARTITO")
 print("CONNESSIONE A KRAKEN...")
+balance = exchange.feth_balance()
+print (balance)
 print("BOT IN ESECUZIONE...")
 import os
 import time
