@@ -1,6 +1,6 @@
 print("BOT PARTITO")
 print("CONNESSIONE A KRAKEN...")
-print("BOT IN ESECUZIONE...)
+print("BOT IN ESECUZIONE...")
 import os
 import time
 import ccxt
