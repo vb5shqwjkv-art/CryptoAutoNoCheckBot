@@ -1,3 +1,4 @@
+print("BOT PARTITO")
 import os
 import time
 import ccxt
