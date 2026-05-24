@@ -1,7 +1,5 @@
 print("BOT PARTITO")
 print("CONNESSIONE A KRAKEN...")
-balance = exchange.feth_balance()
-print (balance)
 print("BOT IN ESECUZIONE...")
 import os
 import time
@@ -19,6 +17,8 @@ exchange = ccxt.kraken({
     'secret': KRAKEN_SECRET,
     'enableRateLimit': True,
 })
+balance = exchange.feth_balance()
+print (balance)
 
 SYMBOL = 'BTC/EUR'
 
