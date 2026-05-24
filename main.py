@@ -1,36 +1,41 @@
-print("BOT PARTITO")
-print("CONNESSIONE A KRAKEN...")
-print("BOT IN ESECUZIONE...")
-import os
-import time
 import ccxt
 import pandas as pd
+import numpy as np
+import os
+import time
+
 from ta.trend import EMAIndicator
 from ta.momentum import RSIIndicator
 from ta.volatility import AverageTrueRange
 
-KRAKEN_API_KEY = os.getenv("KRAKEN_API_KEY")
-KRAKEN_SECRET = os.getenv("KRAKEN_SECRET")
+print("BOT QUANTITATIVO AVVIATO")
+print("CONNESSIONE A KRAKEN...")
 
 exchange = ccxt.kraken({
-    'apiKey': KRAKEN_API_KEY,
-    'secret': KRAKEN_SECRET,
-    'enableRateLimit': True,
+    'apiKey': os.getenv("KRAKEN_API_KEY"),
+    'secret': os.getenv("KRAKEN_SECRET"),
+    'enableRateLimit': True
 })
-balance = exchange.fethBalance()
-print (balance)
 
 SYMBOL = 'BTC/EUR'
 
 IN_POSITION = False
 ENTRY_PRICE = 0
+HIGHEST_PRICE = 0
+
+TIMEFRAME = '15m'
+
+TRAILING_STOP = 0.025
+STOP_LOSS = 0.03
+
+CHECK_INTERVAL = 30
 
 def get_data():
 
     ohlcv = exchange.fetch_ohlcv(
         SYMBOL,
-        timeframe='15m',
-        limit=250
+        timeframe=TIMEFRAME,
+        limit=300
     )
 
     df = pd.DataFrame(
@@ -45,11 +50,25 @@ def get_data():
         ]
     )
 
-    df['ema20'] = EMAIndicator(df['close'], window=20).ema_indicator()
-    df['ema50'] = EMAIndicator(df['close'], window=50).ema_indicator()
-    df['ema200'] = EMAIndicator(df['close'], window=200).ema_indicator()
+    df['ema20'] = EMAIndicator(
+        df['close'],
+        window=20
+    ).ema_indicator()
 
-    df['rsi'] = RSIIndicator(df['close'], window=14).rsi()
+    df['ema50'] = EMAIndicator(
+        df['close'],
+        window=50
+    ).ema_indicator()
+
+    df['ema200'] = EMAIndicator(
+        df['close'],
+        window=200
+    ).ema_indicator()
+
+    df['rsi'] = RSIIndicator(
+        df['close'],
+        window=14
+    ).rsi()
 
     atr = AverageTrueRange(
         df['high'],
@@ -62,101 +81,104 @@ def get_data():
 
     return df
 
-def get_eur_balance():
+def get_balance():
 
     balance = exchange.fetch_balance()
 
-    return balance['total'].get('EUR', 0)
+    eur = balance['total'].get('EUR', 0)
+    btc = balance['total'].get('BTC', 0)
 
-def get_btc_balance():
+    return eur, btc
 
-    balance = exchange.fetch_balance()
-
-    return balance['total'].get('BTC', 0)
-
-def long_signal(df):
+def calculate_edge(df):
 
     last = df.iloc[-1]
 
-    trend = (
-        last['ema20'] >
-        last['ema50'] >
-        last['ema200']
-    )
+    edge = 0
 
-    momentum = (
-        last['rsi'] > 58 and
-        last['rsi'] < 72
-    )
+    if last['ema20'] > last['ema50']:
+        edge += 20
 
-    return trend and momentum
+    if last['ema50'] > last['ema200']:
+        edge += 30
 
-def calculate_position_size(df):
+    if 55 < last['rsi'] < 72:
+        edge += 20
 
-    last = df.iloc[-1]
+    volatility_score = min(last['atr'] * 1000, 30)
 
-    rsi = last['rsi']
+    edge += volatility_score
 
-    balance = get_eur_balance()
+    return min(edge, 100)
 
-    if rsi > 68:
-        risk = 1.0
+def calculate_position_size(edge, balance):
 
-    elif rsi > 62:
-        risk = 0.5
+    if edge > 85:
+        return balance * 1.0
 
-    else:
-        risk = 0.25
+    elif edge > 70:
+        return balance * 0.7
 
-    return balance * risk
+    elif edge > 60:
+        return balance * 0.4
 
-def buy(df):
+    elif edge > 50:
+        return balance * 0.2
+
+    return 0
+
+def buy(price, eur_balance, edge):
 
     global IN_POSITION
     global ENTRY_PRICE
+    global HIGHEST_PRICE
 
-    eur_amount = calculate_position_size(df)
+    amount_eur = calculate_position_size(
+        edge,
+        eur_balance
+    )
 
-    if eur_amount < 5:
+    if amount_eur < 5:
         return
 
-    ticker = exchange.fetch_ticker(SYMBOL)
+    btc_amount = amount_eur / price
 
-    price = ticker['last']
-
-    btc_amount = eur_amount / price
+    print("================================")
+    print("ACQUISTO BTC")
+    print(f"EDGE: {edge}")
+    print(f"PREZZO: {price}")
+    print(f"EURO INVESTITI: {amount_eur}")
 
     exchange.create_market_buy_order(
         SYMBOL,
         btc_amount
     )
 
-    ENTRY_PRICE = price
     IN_POSITION = True
+    ENTRY_PRICE = price
+    HIGHEST_PRICE = price
 
-    print(f'BUY at {price}')
-
-def sell():
+def sell(price, btc_balance, reason):
 
     global IN_POSITION
 
-    btc_balance = get_btc_balance()
+    print("================================")
+    print("VENDITA BTC")
+    print(f"MOTIVO: {reason}")
+    print(f"PREZZO: {price}")
 
-    if btc_balance > 0:
-
-        exchange.create_market_sell_order(
-            SYMBOL,
-            btc_balance
-        )
+    exchange.create_market_sell_order(
+        SYMBOL,
+        btc_balance
+    )
 
     IN_POSITION = False
-
-    print('SELL')
 
 def strategy():
 
     global IN_POSITION
     global ENTRY_PRICE
+    global HIGHEST_PRICE
 
     df = get_data()
 
@@ -164,10 +186,26 @@ def strategy():
 
     price = last['close']
 
+    eur_balance, btc_balance = get_balance()
+
+    edge = calculate_edge(df)
+
+    print("================================")
+    print(f"PREZZO BTC: {price}")
+    print(f"EDGE SCORE: {edge}")
+    print(f"RSI: {last['rsi']}")
+    print(f"EUR: {eur_balance}")
+    print(f"BTC: {btc_balance}")
+
     if not IN_POSITION:
 
-        if long_signal(df):
-            buy(df)
+        if edge > 60:
+
+            buy(
+                price,
+                eur_balance,
+                edge
+            )
 
     else:
 
@@ -175,11 +213,32 @@ def strategy():
             price - ENTRY_PRICE
         ) / ENTRY_PRICE
 
-        if pnl < -0.03:
-            sell()
+        if price > HIGHEST_PRICE:
+            HIGHEST_PRICE = price
 
-        elif pnl > 0.05:
-            sell()
+        trailing_price = HIGHEST_PRICE * (
+            1 - TRAILING_STOP
+        )
+
+        print(f"PNL: {pnl * 100:.2f}%")
+        print(f"HIGHEST: {HIGHEST_PRICE}")
+        print(f"TRAILING: {trailing_price}")
+
+        if pnl <= -STOP_LOSS:
+
+            sell(
+                price,
+                btc_balance,
+                "STOP LOSS"
+            )
+
+        elif price < trailing_price:
+
+            sell(
+                price,
+                btc_balance,
+                "TRAILING STOP"
+            )
 
 while True:
 
@@ -189,6 +248,7 @@ while True:
 
     except Exception as e:
 
-        print(e)
+        print("ERRORE:")
+        print(str(e))
 
-    time.sleep(60)
+    time.sleep(CHECK_INTERVAL)
