@@ -1351,7 +1351,7 @@ class KrakenTradingBot:
             LOGGER.exception("Errore chiusura trade %s: %s", symbol, exc)
             self.telegram.send(f"Errore chiusura trade {symbol}: {exc}")
 
-    def adjust_capital_for_market_limits(self, symbol: str, capital: float, quote_free: float) -> float:
+def adjust_capital_for_market_limits(self, symbol: str, capital: float, quote_free: float) -> float:
         try:
             if capital <= 0:
                 return 0.0
