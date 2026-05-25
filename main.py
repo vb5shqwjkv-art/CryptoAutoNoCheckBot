@@ -118,22 +118,28 @@ class Config:
     ema_fast: int = env_int("EMA_FAST", 20)
     ema_slow: int = env_int("EMA_SLOW", 50)
     rsi_period: int = env_int("RSI_PERIOD", 14)
-    rsi_buy_min: float = env_float("RSI_BUY_MIN", 45.0)
-    rsi_buy_max: float = env_float("RSI_BUY_MAX", 72.0)
+    rsi_buy_min: float = env_float("RSI_BUY_MIN", 50.0)
+    rsi_buy_max: float = env_float("RSI_BUY_MAX", 68.0)
     rsi_exit: float = env_float("RSI_EXIT", 78.0)
     atr_period: int = env_int("ATR_PERIOD", 14)
     volume_window: int = env_int("VOLUME_WINDOW", 20)
-    volume_breakout_multiplier: float = env_float("VOLUME_BREAKOUT_MULTIPLIER", 1.2)
+    volume_breakout_multiplier: float = env_float("VOLUME_BREAKOUT_MULTIPLIER", 1.5)
     breakout_lookback: int = env_int("BREAKOUT_LOOKBACK", 20)
     momentum_lookback: int = env_int("MOMENTUM_LOOKBACK", 5)
 
     min_atr_percent: float = env_float("MIN_ATR_PERCENT", 0.001)
     max_atr_percent: float = env_float("MAX_ATR_PERCENT", 0.20)
     stop_loss_atr_multiplier: float = env_float("STOP_LOSS_ATR_MULTIPLIER", 2.0)
-    take_profit_atr_multiplier: float = env_float("TAKE_PROFIT_ATR_MULTIPLIER", 3.0)
     trailing_atr_multiplier: float = env_float("TRAILING_ATR_MULTIPLIER", 2.0)
-    max_stop_loss_percent: float = env_float("MAX_STOP_LOSS_PERCENT", 0.05)
-    min_take_profit_percent: float = env_float("MIN_TAKE_PROFIT_PERCENT", 0.02)
+    # Stop loss fisso: -4% dall'entry (obbligatorio, non superabile)
+    stop_loss_percent: float = env_float("STOP_LOSS_PERCENT", 0.04)
+    # Take profit fisso: +8% dall'entry (2:1 rispetto allo stop)
+    take_profit_percent: float = env_float("TAKE_PROFIT_PERCENT", 0.08)
+    # Trailing stop: si attiva dopo +3% di guadagno, segue a -3% dal picco
+    trailing_activation_percent: float = env_float("TRAILING_ACTIVATION_PERCENT", 0.03)
+    trailing_distance_percent: float = env_float("TRAILING_DISTANCE_PERCENT", 0.03)
+    # Chiusura automatica dopo N ore se né TP né SL sono stati raggiunti
+    max_trade_hours: int = env_int("MAX_TRADE_HOURS", 48)
 
     # Soglia score per aprire un trade (su ~120 punti max).
     # 90 = segnale forte. Abbassa con BUY_SCORE_THRESHOLD per più trade, alza per più selettività.
@@ -369,7 +375,7 @@ class Strategy:
             rsi_ok = self.cfg.rsi_buy_min <= rsi <= self.cfg.rsi_buy_max
             volume_breakout = volume > volume_avg * self.cfg.volume_breakout_multiplier
             breakout = price > breakout_high
-            momentum_positive = momentum > 0
+            momentum_positive = momentum > 0.002  # almeno +0.2% negli ultimi 5 periodi
             volatility_ok = self.cfg.min_atr_percent <= atr_percent <= self.cfg.max_atr_percent
 
             score = 0.0
@@ -425,8 +431,38 @@ class Strategy:
             else:
                 blocked_by.append(f"volatilita fuori range ({atr_percent * 100:.2f}%)")
 
-            # BUY: score >= soglia + trend rialzista obbligatorio
-            buy = score >= self.cfg.buy_score_threshold and trend_up
+            # BUY: score >= 90 + 4 condizioni obbligatorie tutte vere
+            # - trend_up:       EMA20 > EMA50 (direzione del mercato)
+            # - liquid:         volume 24h >= 30k EUR (possiamo uscire)
+            # - rsi_ok:         RSI 50-68 (zona di forza, non ipercomprato)
+            # - volume_breakout:  spike volume >= 1.5x (domanda reale in arrivo)
+            # - breakout:         prezzo sopra max 20 candele (rottura resistenza)
+            # - momentum_positive: +0.2% negli ultimi 5 periodi (spinta confermata)
+            mandatory_ok = (
+                trend_up
+                and liquid
+                and rsi_ok
+                and volume_breakout   # volume spike obbligatorio
+                and breakout          # rottura resistenza obbligatoria
+                and momentum_positive # momentum positivo obbligatorio
+            )
+            buy = score >= self.cfg.buy_score_threshold and mandatory_ok
+
+            if not mandatory_ok and score >= self.cfg.buy_score_threshold:
+                missing = []
+                if not trend_up:
+                    missing.append("trend ribassista")
+                if not liquid:
+                    missing.append("liquidita insufficiente")
+                if not rsi_ok:
+                    missing.append(f"RSI fuori zona ({rsi:.1f})")
+                if not volume_breakout:
+                    missing.append(f"vol spike assente ({volume / max(volume_avg, 1e-12):.2f}x < 1.5x)")
+                if not breakout:
+                    missing.append("no breakout resistenza")
+                if not momentum_positive:
+                    missing.append(f"momentum debole ({momentum*100:.2f}%)")
+                blocked_by.extend(missing)
 
             return Signal(
                 symbol=symbol,
@@ -635,17 +671,15 @@ class RiskManager:
         return max(0.0, min(desired, capital_max, available))
 
     def levels(self, entry: float, atr: float) -> Dict[str, float]:
-        atr = max(float(atr), entry * self.cfg.min_atr_percent)
+        # Stop loss fisso -4%: garantisce uscita obbligatoria entro perdita massima
+        stop_loss = entry * (1.0 - self.cfg.stop_loss_percent)
 
-        stop_atr = entry - atr * self.cfg.stop_loss_atr_multiplier
-        stop_percent = entry * (1.0 - self.cfg.max_stop_loss_percent)
-        stop_loss = max(stop_atr, stop_percent)
+        # Take profit fisso +8%: obiettivo concreto (rapporto rischio/rendimento 1:2)
+        take_profit = entry * (1.0 + self.cfg.take_profit_percent)
 
-        take_atr = entry + atr * self.cfg.take_profit_atr_multiplier
-        take_percent = entry * (1.0 + self.cfg.min_take_profit_percent)
-        take_profit = max(take_atr, take_percent)
-
-        trailing_stop = max(stop_loss, entry - atr * self.cfg.trailing_atr_multiplier)
+        # Trailing stop iniziale = stop loss (si sposta verso l'alto quando il prezzo sale)
+        # Si attiva solo dopo che il prezzo ha guadagnato TRAILING_ACTIVATION_PERCENT
+        trailing_stop = stop_loss
 
         return {
             "stop_loss": stop_loss,
@@ -669,11 +703,13 @@ class RiskManager:
         if price > pos.highest_price:
             pos.highest_price = price
 
-        atr = max(atr, pos.entry_price * self.cfg.min_atr_percent)
-        candidate = pos.highest_price - atr * self.cfg.trailing_atr_multiplier
-
-        if candidate > pos.trailing_stop:
-            pos.trailing_stop = candidate
+        # Trailing stop basato su percentuale fissa (non ATR)
+        # Si attiva solo dopo che il prezzo ha guadagnato TRAILING_ACTIVATION_PERCENT dall'entry
+        activation_price = pos.entry_price * (1.0 + self.cfg.trailing_activation_percent)
+        if pos.highest_price >= activation_price:
+            candidate = pos.highest_price * (1.0 - self.cfg.trailing_distance_percent)
+            if candidate > pos.trailing_stop:
+                pos.trailing_stop = candidate
 
         self.positions[symbol] = pos
         self.save()
@@ -1067,16 +1103,35 @@ class KrakenTradingBot:
 
                 self.last_prices[symbol] = price
 
+                pnl_pct = (price - pos.entry_price) / pos.entry_price * 100.0
+
                 reason = ""
 
+                # 1. Stop loss obbligatorio -4%: priorità massima, sempre
                 if price <= updated.stop_loss:
-                    reason = "stop loss"
-                elif price <= updated.trailing_stop:
-                    reason = "trailing stop"
+                    reason = f"stop loss -{self.cfg.stop_loss_percent*100:.0f}% ({pnl_pct:.2f}%)"
+
+                # 2. Trailing stop (si attiva solo dopo +3% di guadagno)
+                elif price <= updated.trailing_stop and updated.trailing_stop > pos.stop_loss:
+                    reason = f"trailing stop ({pnl_pct:.2f}%)"
+
+                # 3. Take profit +8%: obiettivo raggiunto
                 elif price >= updated.take_profit:
-                    reason = "take profit"
+                    reason = f"take profit +{self.cfg.take_profit_percent*100:.0f}% ({pnl_pct:.2f}%)"
+
+                # 4. Uscita strategia (inversione trend / RSI)
                 elif exit_data.get("exit"):
                     reason = str(exit_data.get("reason") or "uscita strategia")
+
+                # 5. Timeout: chiude dopo MAX_TRADE_HOURS ore per non tenere posizioni aperte troppo
+                else:
+                    try:
+                        entry_dt = datetime.fromisoformat(pos.entry_time.replace("Z", "+00:00"))
+                        age_hours = (datetime.now(timezone.utc) - entry_dt).total_seconds() / 3600.0
+                        if age_hours >= self.cfg.max_trade_hours:
+                            reason = f"timeout {self.cfg.max_trade_hours}h ({pnl_pct:.2f}%)"
+                    except Exception:
+                        pass
 
                 if reason:
                     self.close_trade(symbol, reason, price)
@@ -1302,19 +1357,28 @@ class KrakenTradingBot:
                 return 0.0
 
             limits = self.markets.get(symbol, {}).get("limits", {}) or {}
-            cost_min = (limits.get("cost", {}) or {}).get("min")
+            cost_min_raw = (limits.get("cost", {}) or {}).get("min")
+            amount_min_raw = (limits.get("amount", {}) or {}).get("min")
             available = max(0.0, quote_free * 0.95)
-            max_amount = max(self.cfg.min_trade_amount, self.cfg.max_trade_amount)
+            max_cap = max(self.cfg.min_trade_amount, self.cfg.max_trade_amount)
 
-            if cost_min is not None:
-                minimum = float(cost_min) * 1.01
+            needed = capital
 
-                if capital < minimum:
-                    if minimum <= available and minimum <= max_amount:
-                        return minimum
-                    return 0.0
+            # Minimo in EUR (cost_min)
+            if cost_min_raw is not None:
+                needed = max(needed, float(cost_min_raw) * 1.01)
 
-            return min(capital, available, max_amount)
+            # Minimo in quantità (amount_min): calcola il capitale necessario
+            if amount_min_raw is not None:
+                price = self.last_prices.get(symbol, 0.0)
+                if price > 0:
+                    needed = max(needed, float(amount_min_raw) * price * 1.01)
+
+            # Se il capitale necessario supera il disponibile o il massimo consentito → blocca
+            if needed > available or needed > max_cap:
+                return 0.0
+
+            return min(needed, available, max_cap)
         except Exception:
             return capital
 
