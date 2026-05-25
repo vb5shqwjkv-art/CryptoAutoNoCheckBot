@@ -100,7 +100,6 @@ class Config:
     retry_attempts: int = env_int("RETRY_ATTEMPTS", 4)
     retry_sleep_seconds: float = env_float("RETRY_SLEEP_SECONDS", 2.0)
 
-    # Abbassato da 250k a 30k: i mercati EUR hanno meno volume di quelli USD
     min_24h_quote_volume_eur: float = env_float("MIN_24H_QUOTE_VOLUME_EUR", 30000.0)
     max_open_trades: int = min(env_int("MAX_OPEN_TRADES", 3), 3)
     min_trade_amount: float = env_float("MIN_TRADE_AMOUNT", 1.0)
@@ -123,18 +122,12 @@ class Config:
     max_atr_percent: float = env_float("MAX_ATR_PERCENT", 0.20)
     stop_loss_atr_multiplier: float = env_float("STOP_LOSS_ATR_MULTIPLIER", 2.0)
     trailing_atr_multiplier: float = env_float("TRAILING_ATR_MULTIPLIER", 2.0)
-    # Stop loss fisso: -4% dall'entry (obbligatorio, non superabile)
     stop_loss_percent: float = env_float("STOP_LOSS_PERCENT", 0.04)
-    # Take profit fisso: +8% dall'entry (2:1 rispetto allo stop)
     take_profit_percent: float = env_float("TAKE_PROFIT_PERCENT", 0.08)
-    # Trailing stop: si attiva dopo +3% di guadagno, segue a -3% dal picco
     trailing_activation_percent: float = env_float("TRAILING_ACTIVATION_PERCENT", 0.03)
     trailing_distance_percent: float = env_float("TRAILING_DISTANCE_PERCENT", 0.03)
-    # Chiusura automatica dopo N ore se né TP né SL sono stati raggiunti
     max_trade_hours: int = env_int("MAX_TRADE_HOURS", 48)
 
-    # Soglia score per aprire un trade (su ~120 punti max).
-    # 90 = segnale forte. Abbassa con BUY_SCORE_THRESHOLD per più trade, alza per più selettività.
     buy_score_threshold: float = env_float("BUY_SCORE_THRESHOLD", 90.0)
 
     max_consecutive_losses: int = env_int("MAX_CONSECUTIVE_LOSSES", 3)
@@ -219,7 +212,6 @@ class TelegramPanel:
                 response = self.session.get(f"{self.base_url}/getUpdates", params=params, timeout=35)
 
                 if response.status_code == 409:
-                    # Un'altra istanza del bot è già accesa: aspetta e riprova
                     LOGGER.warning("Telegram 409: altra istanza attiva, attendo 30s prima di riprovare")
                     time.sleep(30)
                     continue
@@ -363,7 +355,7 @@ class Strategy:
             rsi_ok = self.cfg.rsi_buy_min <= rsi <= self.cfg.rsi_buy_max
             volume_breakout = volume > volume_avg * self.cfg.volume_breakout_multiplier
             breakout = price > breakout_high
-            momentum_positive = momentum > 0.002  # almeno +0.2% negli ultimi 5 periodi
+            momentum_positive = momentum > 0.002
             volatility_ok = self.cfg.min_atr_percent <= atr_percent <= self.cfg.max_atr_percent
 
             score = 0.0
@@ -419,20 +411,13 @@ class Strategy:
             else:
                 blocked_by.append(f"volatilita fuori range ({atr_percent * 100:.2f}%)")
 
-            # BUY: score >= 90 + 4 condizioni obbligatorie tutte vere
-            # - trend_up:       EMA20 > EMA50 (direzione del mercato)
-            # - liquid:         volume 24h >= 30k EUR (possiamo uscire)
-            # - rsi_ok:         RSI 50-68 (zona di forza, non ipercomprato)
-            # - volume_breakout:  spike volume >= 1.5x (domanda reale in arrivo)
-            # - breakout:         prezzo sopra max 20 candele (rottura resistenza)
-            # - momentum_positive: +0.2% negli ultimi 5 periodi (spinta confermata)
             mandatory_ok = (
                 trend_up
                 and liquid
                 and rsi_ok
-                and volume_breakout   # volume spike obbligatorio
-                and breakout          # rottura resistenza obbligatoria
-                and momentum_positive # momentum positivo obbligatorio
+                and volume_breakout
+                and breakout
+                and momentum_positive
             )
             buy = score >= self.cfg.buy_score_threshold and mandatory_ok
 
@@ -644,28 +629,22 @@ class RiskManager:
             return 0.0
 
         # Scala lineare: score 90 → 1 EUR, score 120 → 3 EUR
-        # Formula: 1 + (score - 90) / 30 * 2, clampato tra 1 e 3
         score = float(signal_data.score) if signal_data is not None else self.cfg.buy_score_threshold
-        score_min = self.cfg.buy_score_threshold          # 90
+        score_min = self.cfg.buy_score_threshold   # 90
         score_max = 120.0
-        capital_min = self.cfg.min_trade_amount           # 1.0 EUR
-        capital_max = self.cfg.max_trade_amount           # 3.0 EUR
+        capital_min = self.cfg.min_trade_amount    # 1.0 EUR
+        capital_max = self.cfg.max_trade_amount    # 3.0 EUR
 
         score_range = max(score_max - score_min, 1.0)
         ratio = max(0.0, min(1.0, (score - score_min) / score_range))
         desired = capital_min + ratio * (capital_max - capital_min)
 
-        return max(0.0, min(desired, capital_max, available))
+        # Garantisce sempre almeno capital_min se il saldo lo permette
+        return max(capital_min, min(desired, capital_max, available))
 
     def levels(self, entry: float, atr: float) -> Dict[str, float]:
-        # Stop loss fisso -4%: garantisce uscita obbligatoria entro perdita massima
         stop_loss = entry * (1.0 - self.cfg.stop_loss_percent)
-
-        # Take profit fisso +8%: obiettivo concreto (rapporto rischio/rendimento 1:2)
         take_profit = entry * (1.0 + self.cfg.take_profit_percent)
-
-        # Trailing stop iniziale = stop loss (si sposta verso l'alto quando il prezzo sale)
-        # Si attiva solo dopo che il prezzo ha guadagnato TRAILING_ACTIVATION_PERCENT
         trailing_stop = stop_loss
 
         return {
@@ -690,8 +669,6 @@ class RiskManager:
         if price > pos.highest_price:
             pos.highest_price = price
 
-        # Trailing stop basato su percentuale fissa (non ATR)
-        # Si attiva solo dopo che il prezzo ha guadagnato TRAILING_ACTIVATION_PERCENT dall'entry
         activation_price = pos.entry_price * (1.0 + self.cfg.trailing_activation_percent)
         if pos.highest_price >= activation_price:
             candidate = pos.highest_price * (1.0 - self.cfg.trailing_distance_percent)
@@ -1093,23 +1070,18 @@ class KrakenTradingBot:
 
                 reason = ""
 
-                # 1. Stop loss obbligatorio -4%: priorità massima, sempre
                 if price <= updated.stop_loss:
                     reason = f"stop loss -{self.cfg.stop_loss_percent*100:.0f}% ({pnl_pct:.2f}%)"
 
-                # 2. Trailing stop (si attiva solo dopo +3% di guadagno)
                 elif price <= updated.trailing_stop and updated.trailing_stop > pos.stop_loss:
                     reason = f"trailing stop ({pnl_pct:.2f}%)"
 
-                # 3. Take profit +8%: obiettivo raggiunto
                 elif price >= updated.take_profit:
                     reason = f"take profit +{self.cfg.take_profit_percent*100:.0f}% ({pnl_pct:.2f}%)"
 
-                # 4. Uscita strategia (inversione trend / RSI)
                 elif exit_data.get("exit"):
                     reason = str(exit_data.get("reason") or "uscita strategia")
 
-                # 5. Timeout: chiude dopo MAX_TRADE_HOURS ore per non tenere posizioni aperte troppo
                 else:
                     try:
                         entry_dt = datetime.fromisoformat(pos.entry_time.replace("Z", "+00:00"))
@@ -1157,7 +1129,6 @@ class KrakenTradingBot:
 
             free = self.last_balance.get("free", {}) or {}
 
-            # Kraken può restituire il saldo EUR come "EUR" o "ZEUR" — proviamo entrambi
             quote_free = float(free.get(quote, 0.0) or 0.0)
             if quote_free <= 0 and quote == "EUR":
                 quote_free = float(free.get("ZEUR", 0.0) or 0.0)
@@ -1297,25 +1268,24 @@ class KrakenTradingBot:
 
             needed = capital
 
-            # Minimum cost in quote currency
+            # Minimo costo in valuta quote
             if cost_min_raw is not None:
                 needed = max(needed, float(cost_min_raw) * 1.01)
 
-            # Minimum amount: compute equivalent capital needed
+            # Minimo amount: calcola il capitale equivalente necessario
             if amount_min_raw is not None:
                 price = self.last_prices.get(symbol, 0.0)
                 if price > 0:
                     needed = max(needed, float(amount_min_raw) * price * 1.01)
 
-            # Not enough free balance to meet minimum → block
+            # Saldo insufficiente anche solo per il minimo Kraken → blocca
             if needed > available:
                 return 0.0
 
-            # If minimum exceeds configured max, allow up to available (capped at min * 1.05 for safety)
-            if needed > max_cap:
-                return min(needed, available)
+            # Restituisce il massimo tra needed e capital, clampato a max_cap e available
+            # Non va MAI sotto il minimo necessario per Kraken
+            return min(max(needed, capital), max_cap, available)
 
-            return min(needed, available, max_cap)
         except Exception:
             return capital
 
@@ -1583,7 +1553,6 @@ class KrakenTradingBot:
     def cmd_diagnostica(self) -> str:
         lines = ["DIAGNOSTICA BOT"]
 
-        # --- Saldo raw Kraken ---
         try:
             self.refresh_balance(send=False)
             free = self.last_balance.get("free", {}) or {}
@@ -1611,7 +1580,6 @@ class KrakenTradingBot:
         except Exception as exc:
             lines.append(f"Errore fetch saldo: {exc}")
 
-        # --- Config trade ---
         lines.append("\nCONFIG TRADE:")
         lines.append(f"  min_trade_amount: {self.cfg.min_trade_amount:.2f} EUR")
         lines.append(f"  max_trade_amount: {self.cfg.max_trade_amount:.2f} EUR")
@@ -1621,7 +1589,6 @@ class KrakenTradingBot:
         lines.append(f"  trading_enabled: {self.trading_enabled}")
         lines.append(f"  dry_run: {self.cfg.dry_run}")
 
-        # --- Stato risk ---
         lines.append("\nSTATO RISK:")
         lines.append(f"  trade aperti: {len(self.risk.positions)}/{self.cfg.max_open_trades}")
         lines.append(f"  perdite consecutive: {self.risk.consecutive_losses}/{self.cfg.max_consecutive_losses}")
@@ -1630,7 +1597,6 @@ class KrakenTradingBot:
         since_last = int(time.time() - self.risk.last_trade_at) if self.risk.last_trade_at > 0 else -1
         lines.append(f"  secondi dall'ultimo trade: {since_last} (min={self.cfg.min_seconds_between_trades})")
 
-        # --- Limiti mercato top segnali ---
         if self.best_signals:
             lines.append("\nLIMITI MERCATO (top 5 segnali):")
             for sig in self.best_signals[:5]:
