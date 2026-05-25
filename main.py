@@ -19,7 +19,6 @@ from ta.momentum import RSIIndicator
 from ta.trend import EMAIndicator
 from ta.volatility import AverageTrueRange
 
-
 QUOTE_CURRENCIES = {"EUR"}
 STABLECOINS = {
     "USDT", "USDC", "DAI", "TUSD", "USDP", "USDD", "BUSD", "FDUSD",
@@ -32,7 +31,6 @@ LEVERAGED_WORDS = {
     "2L", "2S", "3L", "3S", "4L", "4S", "5L", "5S"
 }
 
-
 def setup_logging() -> logging.Logger:
     logging.basicConfig(
         level=logging.INFO,
@@ -42,9 +40,7 @@ def setup_logging() -> logging.Logger:
     )
     return logging.getLogger("KrakenRailwayBot")
 
-
 LOGGER = setup_logging()
-
 
 def start_health_server() -> None:
     port = int(os.getenv("PORT", "8080"))
@@ -71,13 +67,11 @@ def start_health_server() -> None:
 
     threading.Thread(target=run_server, daemon=True).start()
 
-
 def env_int(name: str, default: int) -> int:
     try:
         return int(os.getenv(name, str(default)).strip())
     except Exception:
         return default
-
 
 def env_float(name: str, default: float) -> float:
     try:
@@ -85,13 +79,11 @@ def env_float(name: str, default: float) -> float:
     except Exception:
         return default
 
-
 def env_bool(name: str, default: bool) -> bool:
     value = os.getenv(name)
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "y", "on"}
-
 
 @dataclass
 class Config:
@@ -162,7 +154,6 @@ class Config:
             and self.telegram_token.upper() != "DISABLED"
             and self.telegram_chat_id.upper() != "DISABLED"
         )
-
 
 class TelegramPanel:
     def __init__(self, cfg: Config):
@@ -274,7 +265,6 @@ class TelegramPanel:
             LOGGER.exception("Errore comando Telegram: %s", exc)
             self.send(f"Errore comando Telegram: {exc}")
 
-
 @dataclass
 class Signal:
     symbol: str
@@ -285,7 +275,6 @@ class Signal:
     blocked_by: List[str]
     metrics: Dict[str, float]
     timestamp: str
-
 
 @dataclass
 class Position:
@@ -303,7 +292,6 @@ class Position:
     quote_cost: float
     fees: float
     score: float
-
 
 class Strategy:
     def __init__(self, cfg: Config):
@@ -512,7 +500,6 @@ class Strategy:
             return {"exit": False, "reason": "", "metrics": metrics}
         except Exception:
             return {"exit": False, "reason": "", "metrics": {}}
-
 
 class RiskManager:
     def __init__(self, cfg: Config):
@@ -780,7 +767,6 @@ class RiskManager:
 
     def total_closed_pnl(self) -> float:
         return sum(float(t.get("net_pnl", 0.0)) for t in self.closed_trades)
-
 
 class KrakenTradingBot:
     def __init__(self):
@@ -1298,6 +1284,41 @@ class KrakenTradingBot:
             LOGGER.exception("Errore apertura trade %s: %s", sig.symbol, exc)
             self.telegram.send(f"Errore apertura trade {sig.symbol}: {exc}")
 
+    def adjust_capital_for_market_limits(self, symbol: str, capital: float, quote_free: float) -> float:
+        try:
+            if capital <= 0:
+                return 0.0
+
+            limits = self.markets.get(symbol, {}).get("limits", {}) or {}
+            cost_min_raw = (limits.get("cost", {}) or {}).get("min")
+            amount_min_raw = (limits.get("amount", {}) or {}).get("min")
+            available = max(0.0, quote_free * 0.95)
+            max_cap = self.cfg.max_trade_amount
+
+            needed = capital
+
+            # Minimum cost in quote currency
+            if cost_min_raw is not None:
+                needed = max(needed, float(cost_min_raw) * 1.01)
+
+            # Minimum amount: compute equivalent capital needed
+            if amount_min_raw is not None:
+                price = self.last_prices.get(symbol, 0.0)
+                if price > 0:
+                    needed = max(needed, float(amount_min_raw) * price * 1.01)
+
+            # Not enough free balance to meet minimum → block
+            if needed > available:
+                return 0.0
+
+            # If minimum exceeds configured max, allow up to available (capped at min * 1.05 for safety)
+            if needed > max_cap:
+                return min(needed, available)
+
+            return min(needed, available, max_cap)
+        except Exception:
+            return capital
+
     def close_trade(self, symbol: str, reason: str, fallback_price: float) -> None:
         try:
             pos = self.risk.positions.get(symbol)
@@ -1350,37 +1371,6 @@ class KrakenTradingBot:
             self.last_error = str(exc)
             LOGGER.exception("Errore chiusura trade %s: %s", symbol, exc)
             self.telegram.send(f"Errore chiusura trade {symbol}: {exc}")
-
-def adjust_capital_for_market_limits(self, symbol: str, capital: float, quote_free: float) -> float:
-        try:
-            if capital <= 0:
-                return 0.0
-
-            limits = self.markets.get(symbol, {}).get("limits", {}) or {}
-            cost_min_raw = (limits.get("cost", {}) or {}).get("min")
-            amount_min_raw = (limits.get("amount", {}) or {}).get("min")
-            available = max(0.0, quote_free * 0.95)
-            max_cap = max(self.cfg.min_trade_amount, self.cfg.max_trade_amount)
-
-            needed = capital
-
-            # Minimo in EUR (cost_min)
-            if cost_min_raw is not None:
-                needed = max(needed, float(cost_min_raw) * 1.01)
-
-            # Minimo in quantità (amount_min): calcola il capitale necessario
-            if amount_min_raw is not None:
-                price = self.last_prices.get(symbol, 0.0)
-                if price > 0:
-                    needed = max(needed, float(amount_min_raw) * price * 1.01)
-
-            # Se il capitale necessario supera il disponibile o il massimo consentito → blocca
-            if needed > available or needed > max_cap:
-                return 0.0
-
-            return min(needed, available, max_cap)
-        except Exception:
-            return capital
 
     def fetch_price(self, symbol: str) -> float:
         try:
@@ -1716,7 +1706,6 @@ def adjust_capital_for_market_limits(self, symbol: str, capital: float, quote_fr
                 time.sleep(self.cfg.scan_interval_seconds)
 
         self.telegram.send("Bot arrestato")
-
 
 if __name__ == "__main__":
     print("Avvio container Railway...", flush=True)
