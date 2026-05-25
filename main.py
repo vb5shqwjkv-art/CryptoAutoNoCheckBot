@@ -20,7 +20,7 @@ from ta.trend import EMAIndicator
 from ta.volatility import AverageTrueRange
 
 
-QUOTE_CURRENCIES = {"USD", "USDT"}
+QUOTE_CURRENCIES = {"EUR"}
 STABLECOINS = {
     "USDT", "USDC", "DAI", "TUSD", "USDP", "USDD", "BUSD", "FDUSD",
     "PYUSD", "GUSD", "LUSD", "FRAX", "SUSD", "USDS", "USDE", "SDAI",
@@ -108,7 +108,7 @@ class Config:
     retry_attempts: int = env_int("RETRY_ATTEMPTS", 4)
     retry_sleep_seconds: float = env_float("RETRY_SLEEP_SECONDS", 2.0)
 
-    min_24h_quote_volume_usd: float = env_float("MIN_24H_QUOTE_VOLUME_USD", 250000.0)
+    min_24h_quote_volume_eur: float = env_float("MIN_24H_QUOTE_VOLUME_EUR", 250000.0)
     max_open_trades: int = min(env_int("MAX_OPEN_TRADES", 3), 3)
     min_trade_amount: float = env_float("MIN_TRADE_AMOUNT", 0.45)
     max_trade_amount: float = env_float("MAX_TRADE_AMOUNT", 1.35)
@@ -351,7 +351,7 @@ class Strategy:
             momentum = float(row["momentum"])
             quote_volume_24h = float(df["quote_volume"].tail(96).sum())
 
-            liquid = quote_volume_24h >= self.cfg.min_24h_quote_volume_usd
+            liquid = quote_volume_24h >= self.cfg.min_24h_quote_volume_eur
             trend_up = ema20 > ema50
             rsi_ok = self.cfg.rsi_buy_min <= rsi <= self.cfg.rsi_buy_max
             volume_breakout = volume > volume_avg * self.cfg.volume_breakout_multiplier
@@ -849,8 +849,8 @@ class KrakenTradingBot:
             "Exchange: Kraken reale\n"
             f"Timeframe: {self.cfg.timeframe}\n"
             f"Dry run: {self.cfg.dry_run}\n"
-            f"Min trade: {self.cfg.min_trade_amount:.2f}\n"
-            f"Max trade: {self.cfg.max_trade_amount:.2f}"
+            f"Min trade: {self.cfg.min_trade_amount:.2f} EUR\n"
+            f"Max trade: {self.cfg.max_trade_amount:.2f} EUR"
         )
 
         self.load_markets()
@@ -897,11 +897,11 @@ class KrakenTradingBot:
         self.symbols.sort()
         self.last_market_reload = time.time()
 
-        LOGGER.info("Mercati monitorati USD/USDT: %s", len(self.symbols))
+        LOGGER.info("Mercati monitorati EUR: %s", len(self.symbols))
 
         self.telegram.send(
             "Connessione Kraken riuscita\n"
-            f"Coin monitorate USD/USDT: {len(self.symbols)}"
+            f"Coin monitorate EUR: {len(self.symbols)}"
         )
 
     def refresh_balance(self, send: bool = False) -> None:
@@ -921,25 +921,19 @@ class KrakenTradingBot:
     def estimate_equity(self, balance: Dict[str, Any]) -> float:
         total = balance.get("total", {}) or {}
 
-        equity = float(total.get("USD", 0.0) or 0.0)
-        equity += float(total.get("USDT", 0.0) or 0.0)
+        equity = float(total.get("EUR", 0.0) or 0.0)
 
         for asset, amount_raw in total.items():
             try:
                 asset = str(asset).upper()
                 amount = float(amount_raw or 0.0)
 
-                if amount <= 0 or asset in {"USD", "USDT"}:
+                if amount <= 0 or asset == "EUR":
                     continue
 
-                symbol = ""
+                symbol = f"{asset}/EUR"
 
-                if f"{asset}/USD" in self.markets:
-                    symbol = f"{asset}/USD"
-                elif f"{asset}/USDT" in self.markets:
-                    symbol = f"{asset}/USDT"
-
-                if not symbol:
+                if symbol not in self.markets:
                     continue
 
                 ticker = self.call(self.exchange.fetch_ticker, symbol)
@@ -987,7 +981,7 @@ class KrakenTradingBot:
                 signals.append(sig)
                 self.last_prices[symbol] = sig.price
 
-                if sig.metrics.get("quote_volume_24h", 0.0) >= self.cfg.min_24h_quote_volume_usd:
+                if sig.metrics.get("quote_volume_24h", 0.0) >= self.cfg.min_24h_quote_volume_eur:
                     liquid += 1
 
                 if sig.buy:
@@ -1294,12 +1288,10 @@ class KrakenTradingBot:
 
         return (
             "SALDO ACCOUNT\n"
-            f"Equity stimata: {self.current_equity:.2f} USD\n"
-            f"USD free: {float(free.get('USD', 0) or 0):.2f}\n"
-            f"USDT free: {float(free.get('USDT', 0) or 0):.2f}\n"
-            f"USD totale: {float(total.get('USD', 0) or 0):.2f}\n"
-            f"USDT totale: {float(total.get('USDT', 0) or 0):.2f}\n"
-            f"PnL giornaliero: {self.risk.daily_realized_pnl:.2f} USD\n"
+            f"Equity stimata: {self.current_equity:.2f} EUR\n"
+            f"EUR free: {float(free.get('EUR', 0) or 0):.2f}\n"
+            f"EUR totale: {float(total.get('EUR', 0) or 0):.2f}\n"
+            f"PnL giornaliero: {self.risk.daily_realized_pnl:.2f} EUR\n"
             f"Drawdown: {self.risk.current_drawdown * 100:.2f}%"
         )
 
@@ -1331,13 +1323,13 @@ class KrakenTradingBot:
             "STATUS BOT\n"
             f"Trading attivo: {self.trading_enabled}\n"
             f"Dry run: {self.cfg.dry_run}\n"
-            f"Min trade: {self.cfg.min_trade_amount:.2f}\n"
-            f"Max trade: {self.cfg.max_trade_amount:.2f}\n"
+            f"Min trade: {self.cfg.min_trade_amount:.2f} EUR\n"
+            f"Max trade: {self.cfg.max_trade_amount:.2f} EUR\n"
             f"Mercati monitorati: {len(self.symbols)}\n"
             f"Coin liquide ultimo scan: {self.liquid_count}\n"
             f"Trade aperti: {len(self.risk.positions)}/{self.cfg.max_open_trades}\n"
-            f"Equity: {self.current_equity:.2f} USD\n"
-            f"PnL giornaliero: {self.risk.daily_realized_pnl:.2f} USD\n"
+            f"Equity: {self.current_equity:.2f} EUR\n"
+            f"PnL giornaliero: {self.risk.daily_realized_pnl:.2f} EUR\n"
             f"Drawdown: {self.risk.current_drawdown * 100:.2f}%\n"
             f"Perdite consecutive: {self.risk.consecutive_losses}\n"
             f"Pausa rischio: {self.risk.pause_minutes()} min\n"
@@ -1385,9 +1377,9 @@ class KrakenTradingBot:
 
         return (
             "PROFITTO\n"
-            f"PnL giornaliero realizzato: {self.risk.daily_realized_pnl:.2f} USD\n"
-            f"PnL aperto stimato: {unrealized:.2f} USD\n"
-            f"PnL totale chiuso: {self.risk.total_closed_pnl():.2f} USD\n"
+            f"PnL giornaliero realizzato: {self.risk.daily_realized_pnl:.2f} EUR\n"
+            f"PnL aperto stimato: {unrealized:.2f} EUR\n"
+            f"PnL totale chiuso: {self.risk.total_closed_pnl():.2f} EUR\n"
             f"Drawdown: {self.risk.current_drawdown * 100:.2f}%\n"
             f"Trade chiusi totali: {len(self.risk.closed_trades)}"
         )
@@ -1396,10 +1388,10 @@ class KrakenTradingBot:
         return (
             "MERCATO\n"
             "Exchange: Kraken\n"
-            f"Coppie USD/USDT filtrate: {len(self.symbols)}\n"
+            f"Coppie EUR filtrate: {len(self.symbols)}\n"
             f"Coin liquide ultimo scan: {self.liquid_count}\n"
             f"Timeframe: {self.cfg.timeframe}\n"
-            f"Volume minimo 24h: {self.cfg.min_24h_quote_volume_usd:.0f} USD\n"
+            f"Volume minimo 24h: {self.cfg.min_24h_quote_volume_eur:.0f} EUR\n"
             f"Scan completati: {self.scan_count}"
         )
 
