@@ -95,120 +95,68 @@ def env_bool(name: str, default: bool) -> bool:
 
 @dataclass
 class Config:
-    kraken_api_key: str
-    kraken_secret: str
-    telegram_token: str
-    telegram_chat_id: str
+    kraken_api_key: str = os.getenv("KRAKEN_API_KEY", "").strip()
+    kraken_secret: str = os.getenv("KRAKEN_SECRET", "").strip()
+    telegram_token: str = os.getenv("TELEGRAM_TOKEN", "").strip()
+    telegram_chat_id: str = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
-    timeframe: str
-    ohlcv_limit: int
-    scan_interval_seconds: int
-    per_symbol_delay_seconds: float
-    market_refresh_seconds: int
+    timeframe: str = os.getenv("TIMEFRAME", "15m").strip()
+    ohlcv_limit: int = env_int("OHLCV_LIMIT", 150)
+    scan_interval_seconds: int = env_int("SCAN_INTERVAL_SECONDS", 60)
+    per_symbol_delay_seconds: float = env_float("PER_SYMBOL_DELAY_SECONDS", 1.2)
+    market_refresh_seconds: int = env_int("MARKET_REFRESH_SECONDS", 3600)
+    retry_attempts: int = env_int("RETRY_ATTEMPTS", 4)
+    retry_sleep_seconds: float = env_float("RETRY_SLEEP_SECONDS", 2.0)
 
-    retry_attempts: int
-    retry_sleep_seconds: float
+    min_24h_quote_volume_usd: float = env_float("MIN_24H_QUOTE_VOLUME_USD", 250000.0)
+    max_open_trades: int = min(env_int("MAX_OPEN_TRADES", 3), 3)
+    min_trade_amount: float = env_float("MIN_TRADE_AMOUNT", 0.45)
+    max_trade_amount: float = env_float("MAX_TRADE_AMOUNT", 1.35)
+    daily_max_loss: float = min(env_float("DAILY_MAX_LOSS", 0.05), 0.05)
 
-    min_24h_quote_volume_usd: float
-    max_open_trades: int
-    max_capital_per_trade: float
-    daily_max_loss: float
+    ema_fast: int = env_int("EMA_FAST", 20)
+    ema_slow: int = env_int("EMA_SLOW", 50)
+    rsi_period: int = env_int("RSI_PERIOD", 14)
+    rsi_buy_min: float = env_float("RSI_BUY_MIN", 50.0)
+    rsi_buy_max: float = env_float("RSI_BUY_MAX", 70.0)
+    rsi_exit: float = env_float("RSI_EXIT", 78.0)
+    atr_period: int = env_int("ATR_PERIOD", 14)
+    volume_window: int = env_int("VOLUME_WINDOW", 20)
+    volume_breakout_multiplier: float = env_float("VOLUME_BREAKOUT_MULTIPLIER", 1.35)
+    breakout_lookback: int = env_int("BREAKOUT_LOOKBACK", 20)
+    momentum_lookback: int = env_int("MOMENTUM_LOOKBACK", 5)
 
-    ema_fast: int
-    ema_slow: int
-    rsi_period: int
-    rsi_buy_min: float
-    rsi_buy_max: float
-    rsi_exit: float
-    atr_period: int
-    volume_window: int
-    volume_breakout_multiplier: float
-    breakout_lookback: int
-    momentum_lookback: int
+    min_atr_percent: float = env_float("MIN_ATR_PERCENT", 0.002)
+    max_atr_percent: float = env_float("MAX_ATR_PERCENT", 0.18)
+    stop_loss_atr_multiplier: float = env_float("STOP_LOSS_ATR_MULTIPLIER", 2.0)
+    take_profit_atr_multiplier: float = env_float("TAKE_PROFIT_ATR_MULTIPLIER", 3.0)
+    trailing_atr_multiplier: float = env_float("TRAILING_ATR_MULTIPLIER", 2.0)
+    max_stop_loss_percent: float = env_float("MAX_STOP_LOSS_PERCENT", 0.04)
+    min_take_profit_percent: float = env_float("MIN_TAKE_PROFIT_PERCENT", 0.025)
 
-    min_atr_percent: float
-    max_atr_percent: float
-    stop_loss_atr_multiplier: float
-    take_profit_atr_multiplier: float
-    trailing_atr_multiplier: float
-    max_stop_loss_percent: float
-    min_take_profit_percent: float
+    max_consecutive_losses: int = env_int("MAX_CONSECUTIVE_LOSSES", 3)
+    loss_cooldown_seconds: int = env_int("LOSS_COOLDOWN_SECONDS", 10800)
+    min_seconds_between_trades: int = env_int("MIN_SECONDS_BETWEEN_TRADES", 600)
+    symbol_cooldown_seconds: int = env_int("SYMBOL_COOLDOWN_SECONDS", 3600)
+    telegram_signal_interval_seconds: int = env_int("TELEGRAM_SIGNAL_INTERVAL_SECONDS", 1800)
+    top_signals_limit: int = env_int("TOP_SIGNALS_LIMIT", 10)
 
-    max_consecutive_losses: int
-    loss_cooldown_seconds: int
-    min_seconds_between_trades: int
-    symbol_cooldown_seconds: int
+    dry_run: bool = env_bool("DRY_RUN", False)
+    state_file: str = os.getenv("STATE_FILE", "bot_state.json").strip()
 
-    telegram_signal_interval_seconds: int
-    top_signals_limit: int
-
-    dry_run: bool
-    state_file: str
-
-
-def load_config() -> Config:
-    return Config(
-        kraken_api_key=os.getenv("KRAKEN_API_KEY", "").strip(),
-        kraken_secret=os.getenv("KRAKEN_SECRET", "").strip(),
-        telegram_token=os.getenv("TELEGRAM_TOKEN", "").strip(),
-        telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", "").strip(),
-
-        timeframe=os.getenv("TIMEFRAME", "15m").strip(),
-        ohlcv_limit=env_int("OHLCV_LIMIT", 150),
-        scan_interval_seconds=env_int("SCAN_INTERVAL_SECONDS", 60),
-        per_symbol_delay_seconds=env_float("PER_SYMBOL_DELAY_SECONDS", 1.2),
-        market_refresh_seconds=env_int("MARKET_REFRESH_SECONDS", 3600),
-
-        retry_attempts=env_int("RETRY_ATTEMPTS", 4),
-        retry_sleep_seconds=env_float("RETRY_SLEEP_SECONDS", 2.0),
-
-        min_24h_quote_volume_usd=env_float("MIN_24H_QUOTE_VOLUME_USD", 250000.0),
-        max_open_trades=min(env_int("MAX_OPEN_TRADES", 3), 3),
-        max_capital_per_trade=min(env_float("MAX_CAPITAL_PER_TRADE", 0.02), 0.02),
-        daily_max_loss=min(env_float("DAILY_MAX_LOSS", 0.05), 0.05),
-
-        ema_fast=env_int("EMA_FAST", 20),
-        ema_slow=env_int("EMA_SLOW", 50),
-        rsi_period=env_int("RSI_PERIOD", 14),
-        rsi_buy_min=env_float("RSI_BUY_MIN", 50.0),
-        rsi_buy_max=env_float("RSI_BUY_MAX", 70.0),
-        rsi_exit=env_float("RSI_EXIT", 78.0),
-        atr_period=env_int("ATR_PERIOD", 14),
-        volume_window=env_int("VOLUME_WINDOW", 20),
-        volume_breakout_multiplier=env_float("VOLUME_BREAKOUT_MULTIPLIER", 1.35),
-        breakout_lookback=env_int("BREAKOUT_LOOKBACK", 20),
-        momentum_lookback=env_int("MOMENTUM_LOOKBACK", 5),
-
-        min_atr_percent=env_float("MIN_ATR_PERCENT", 0.002),
-        max_atr_percent=env_float("MAX_ATR_PERCENT", 0.18),
-        stop_loss_atr_multiplier=env_float("STOP_LOSS_ATR_MULTIPLIER", 2.0),
-        take_profit_atr_multiplier=env_float("TAKE_PROFIT_ATR_MULTIPLIER", 3.0),
-        trailing_atr_multiplier=env_float("TRAILING_ATR_MULTIPLIER", 2.0),
-        max_stop_loss_percent=env_float("MAX_STOP_LOSS_PERCENT", 0.04),
-        min_take_profit_percent=env_float("MIN_TAKE_PROFIT_PERCENT", 0.025),
-
-        max_consecutive_losses=env_int("MAX_CONSECUTIVE_LOSSES", 3),
-        loss_cooldown_seconds=env_int("LOSS_COOLDOWN_SECONDS", 10800),
-        min_seconds_between_trades=env_int("MIN_SECONDS_BETWEEN_TRADES", 600),
-        symbol_cooldown_seconds=env_int("SYMBOL_COOLDOWN_SECONDS", 3600),
-
-        telegram_signal_interval_seconds=env_int("TELEGRAM_SIGNAL_INTERVAL_SECONDS", 1800),
-        top_signals_limit=env_int("TOP_SIGNALS_LIMIT", 10),
-
-        dry_run=env_bool("DRY_RUN", False),
-        state_file=os.getenv("STATE_FILE", "bot_state.json").strip(),
-    )
+    def telegram_enabled(self) -> bool:
+        return bool(
+            self.telegram_token
+            and self.telegram_chat_id
+            and self.telegram_token.upper() != "DISABLED"
+            and self.telegram_chat_id.upper() != "DISABLED"
+        )
 
 
 class TelegramPanel:
     def __init__(self, cfg: Config):
         self.cfg = cfg
-        self.enabled = bool(
-            cfg.telegram_token
-            and cfg.telegram_chat_id
-            and cfg.telegram_token.upper() != "DISABLED"
-            and cfg.telegram_chat_id.upper() != "DISABLED"
-        )
+        self.enabled = cfg.telegram_enabled()
         self.base_url = f"https://api.telegram.org/bot{cfg.telegram_token}"
         self.chat_id = str(cfg.telegram_chat_id)
         self.session = requests.Session()
@@ -228,27 +176,19 @@ class TelegramPanel:
         try:
             ok = True
             for start in range(0, len(text), 3900):
-                chunk = text[start:start + 3900]
                 response = self.session.post(
                     f"{self.base_url}/sendMessage",
                     json={
                         "chat_id": self.chat_id,
-                        "text": chunk,
+                        "text": text[start:start + 3900],
                         "disable_notification": silent,
                     },
                     timeout=20,
                 )
-
                 if response.status_code >= 400:
                     ok = False
-                    LOGGER.error(
-                        "Errore Telegram sendMessage %s: %s",
-                        response.status_code,
-                        response.text[:500],
-                    )
-
+                    LOGGER.error("Errore Telegram sendMessage %s: %s", response.status_code, response.text[:500])
                 time.sleep(0.2)
-
             return ok
         except Exception as exc:
             LOGGER.exception("Errore invio Telegram: %s", exc)
@@ -270,26 +210,14 @@ class TelegramPanel:
 
         while not self.stop_event.is_set():
             try:
-                params: Dict[str, Any] = {
-                    "timeout": 25,
-                    "allowed_updates": ["message"],
-                }
-
+                params: Dict[str, Any] = {"timeout": 25, "allowed_updates": ["message"]}
                 if self.offset is not None:
                     params["offset"] = self.offset
 
-                response = self.session.get(
-                    f"{self.base_url}/getUpdates",
-                    params=params,
-                    timeout=35,
-                )
+                response = self.session.get(f"{self.base_url}/getUpdates", params=params, timeout=35)
 
                 if response.status_code >= 400:
-                    LOGGER.error(
-                        "Telegram getUpdates %s: %s",
-                        response.status_code,
-                        response.text[:500],
-                    )
+                    LOGGER.error("Telegram getUpdates %s: %s", response.status_code, response.text[:500])
                     time.sleep(5)
                     continue
 
@@ -364,53 +292,28 @@ class Strategy:
 
     def dataframe(self, ohlcv: List[List[float]]) -> pd.DataFrame:
         try:
-            df = pd.DataFrame(
-                ohlcv,
-                columns=["timestamp", "open", "high", "low", "close", "volume"],
-            )
-
+            df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
             if df.empty:
                 return df
-
             df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
-
             for col in ["open", "high", "low", "close", "volume"]:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
-
             return df.dropna().reset_index(drop=True)
         except Exception:
             return pd.DataFrame()
 
     def indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         try:
-            needed = max(
-                self.cfg.ema_slow,
-                self.cfg.breakout_lookback,
-                self.cfg.volume_window,
-                80,
-            )
-
+            needed = max(self.cfg.ema_slow, self.cfg.breakout_lookback, self.cfg.volume_window, 80)
             if len(df) < needed:
                 return pd.DataFrame()
 
             df = df.copy()
             close = df["close"]
 
-            df["ema20"] = EMAIndicator(
-                close=close,
-                window=self.cfg.ema_fast,
-            ).ema_indicator()
-
-            df["ema50"] = EMAIndicator(
-                close=close,
-                window=self.cfg.ema_slow,
-            ).ema_indicator()
-
-            df["rsi"] = RSIIndicator(
-                close=close,
-                window=self.cfg.rsi_period,
-            ).rsi()
-
+            df["ema20"] = EMAIndicator(close=close, window=self.cfg.ema_fast).ema_indicator()
+            df["ema50"] = EMAIndicator(close=close, window=self.cfg.ema_slow).ema_indicator()
+            df["rsi"] = RSIIndicator(close=close, window=self.cfg.rsi_period).rsi()
             df["atr"] = AverageTrueRange(
                 high=df["high"],
                 low=df["low"],
@@ -431,7 +334,6 @@ class Strategy:
     def analyze(self, symbol: str, ohlcv: List[List[float]]) -> Optional[Signal]:
         try:
             df = self.indicators(self.dataframe(ohlcv))
-
             if df.empty:
                 return None
 
@@ -463,21 +365,34 @@ class Strategy:
             if liquid:
                 score += 15
                 reasons.append("liquido")
+
             if trend_up:
-                score += 20
+                ema_strength = min(max((ema20 - ema50) / max(price, 1e-12), 0.0) * 100.0, 8.0)
+                score += 20 + ema_strength
                 reasons.append("EMA20 sopra EMA50")
+
             if rsi_ok:
                 score += 15
                 reasons.append("RSI valido")
+
             if volume_breakout:
-                score += 20
+                volume_strength = min(
+                    max(volume / max(volume_avg, 1e-12) - self.cfg.volume_breakout_multiplier, 0.0) * 8.0,
+                    12.0,
+                )
+                score += 20 + volume_strength
                 reasons.append("volume breakout")
+
             if breakout:
-                score += 20
+                breakout_strength = min(max(price / max(breakout_high, 1e-12) - 1.0, 0.0) * 100.0, 8.0)
+                score += 20 + breakout_strength
                 reasons.append("breakout rialzista")
+
             if momentum_positive:
-                score += 10
+                momentum_strength = min(max(momentum, 0.0) * 100.0, 10.0)
+                score += 10 + momentum_strength
                 reasons.append("momentum positivo")
+
             if volatility_ok:
                 score += 10
                 reasons.append("volatilita valida")
@@ -516,7 +431,6 @@ class Strategy:
     def exit_signal(self, ohlcv: List[List[float]]) -> Dict[str, Any]:
         try:
             df = self.indicators(self.dataframe(ohlcv))
-
             if df.empty:
                 return {"exit": False, "reason": "", "metrics": {}}
 
@@ -529,12 +443,7 @@ class Strategy:
             momentum = float(row["momentum"])
             atr = float(row["atr"])
 
-            metrics = {
-                "price": price,
-                "rsi": rsi,
-                "momentum": momentum,
-                "atr": atr,
-            }
+            metrics = {"price": price, "rsi": rsi, "momentum": momentum, "atr": atr}
 
             if ema20 < ema50 and momentum < 0:
                 return {"exit": True, "reason": "inversione trend", "metrics": metrics}
@@ -571,7 +480,6 @@ class RiskManager:
     def load(self) -> None:
         try:
             path = Path(self.cfg.state_file)
-
             if not path.exists():
                 return
 
@@ -615,10 +523,7 @@ class RiskManager:
                 "symbol_last_trade_at": self.symbol_last_trade_at,
             }
 
-            Path(self.cfg.state_file).write_text(
-                json.dumps(data, indent=2),
-                encoding="utf-8",
-            )
+            Path(self.cfg.state_file).write_text(json.dumps(data, indent=2), encoding="utf-8")
         except Exception:
             pass
 
@@ -660,7 +565,7 @@ class RiskManager:
     def pause_minutes(self) -> int:
         return int(max(0.0, self.pause_until - time.time()) // 60)
 
-    def can_open(self, symbol: str, equity: float, quote_free: float) -> Tuple[bool, str]:
+    def can_open(self, symbol: str, quote_free: float) -> Tuple[bool, str]:
         now = time.time()
 
         if symbol in self.positions:
@@ -669,8 +574,8 @@ class RiskManager:
         if len(self.positions) >= self.cfg.max_open_trades:
             return False, "limite massimo trade aperti"
 
-        if quote_free <= 0:
-            return False, "saldo quote insufficiente"
+        if quote_free < self.cfg.min_trade_amount:
+            return False, "saldo troppo basso per minimo trade"
 
         if self.daily_stop_hit():
             return False, "stop giornaliero perdita attivo"
@@ -686,14 +591,42 @@ class RiskManager:
 
         return True, "ok"
 
-    def trade_capital(self, equity: float, quote_free: float) -> float:
-        return max(
-            0.0,
-            min(
-                equity * self.cfg.max_capital_per_trade,
-                quote_free * 0.95,
-            ),
-        )
+    def trade_capital(self, quote_free: float, signal_data: Optional[Signal]) -> float:
+        available = max(0.0, quote_free * 0.95)
+
+        if available < self.cfg.min_trade_amount:
+            return 0.0
+
+        max_amount = max(self.cfg.min_trade_amount, self.cfg.max_trade_amount)
+        multiplier = 1.0
+
+        if signal_data is not None:
+            metrics = signal_data.metrics
+            volume_ratio = float(metrics.get("volume_ratio", 1.0) or 1.0)
+            momentum = float(metrics.get("momentum", 0.0) or 0.0)
+            rsi = float(metrics.get("rsi", 50.0) or 50.0)
+            atr_percent = float(metrics.get("atr_percent", 0.0) or 0.0)
+
+            strength = 0
+
+            if signal_data.score >= 105:
+                strength += 1
+            if signal_data.score >= 115:
+                strength += 1
+            if volume_ratio >= 2.0:
+                strength += 1
+            if momentum >= 0.01:
+                strength += 1
+            if 55 <= rsi <= 65:
+                strength += 1
+            if 0.004 <= atr_percent <= 0.08:
+                strength += 1
+
+            multiplier = 1.0 + min(strength, 4) * 0.5
+
+        desired = self.cfg.min_trade_amount * multiplier
+
+        return max(0.0, min(desired, max_amount, available))
 
     def levels(self, entry: float, atr: float) -> Dict[str, float]:
         atr = max(float(atr), entry * self.cfg.min_atr_percent)
@@ -706,10 +639,7 @@ class RiskManager:
         take_percent = entry * (1.0 + self.cfg.min_take_profit_percent)
         take_profit = max(take_atr, take_percent)
 
-        trailing_stop = max(
-            stop_loss,
-            entry - atr * self.cfg.trailing_atr_multiplier,
-        )
+        trailing_stop = max(stop_loss, entry - atr * self.cfg.trailing_atr_multiplier)
 
         return {
             "stop_loss": stop_loss,
@@ -788,7 +718,6 @@ class RiskManager:
 
         if net < 0:
             self.consecutive_losses += 1
-
             if self.consecutive_losses >= self.cfg.max_consecutive_losses:
                 self.pause_until = now + self.cfg.loss_cooldown_seconds
         else:
@@ -813,7 +742,7 @@ class RiskManager:
 
 class KrakenTradingBot:
     def __init__(self):
-        self.cfg = load_config()
+        self.cfg = Config()
         self.telegram = TelegramPanel(self.cfg)
         self.exchange: Optional[Any] = None
         self.strategy = Strategy(self.cfg)
@@ -919,7 +848,9 @@ class KrakenTradingBot:
             "Bot avviato\n"
             "Exchange: Kraken reale\n"
             f"Timeframe: {self.cfg.timeframe}\n"
-            f"Dry run: {self.cfg.dry_run}"
+            f"Dry run: {self.cfg.dry_run}\n"
+            f"Min trade: {self.cfg.min_trade_amount:.2f}\n"
+            f"Max trade: {self.cfg.max_trade_amount:.2f}"
         )
 
         self.load_markets()
@@ -1160,13 +1091,19 @@ class KrakenTradingBot:
             free = self.last_balance.get("free", {}) or {}
             quote_free = float(free.get(quote, 0.0) or 0.0)
 
-            allowed, reason = self.risk.can_open(sig.symbol, self.current_equity, quote_free)
+            allowed, reason = self.risk.can_open(sig.symbol, quote_free)
 
             if not allowed:
                 LOGGER.info("Segnale ignorato %s: %s", sig.symbol, reason)
                 return
 
-            capital = self.risk.trade_capital(self.current_equity, quote_free)
+            capital = self.risk.trade_capital(quote_free, sig)
+            capital = self.adjust_capital_for_market_limits(sig.symbol, capital, quote_free)
+
+            if capital <= 0:
+                LOGGER.info("Segnale ignorato %s: capitale sotto minimo Kraken", sig.symbol)
+                return
+
             amount = capital / sig.price
             amount = float(self.exchange.amount_to_precision(sig.symbol, amount))
 
@@ -1185,21 +1122,14 @@ class KrakenTradingBot:
                     "fee": {"cost": 0.0},
                 }
             else:
-                order = self.call(
-                    self.exchange.create_market_buy_order,
-                    sig.symbol,
-                    amount,
-                )
+                order = self.call(self.exchange.create_market_buy_order, sig.symbol, amount)
 
             entry = float(order.get("average") or order.get("price") or sig.price)
             filled = float(order.get("filled") or amount)
             cost = float(order.get("cost") or filled * entry)
             fees = self.extract_fees(order)
 
-            levels = self.risk.levels(
-                entry,
-                float(sig.metrics.get("atr", entry * 0.01)),
-            )
+            levels = self.risk.levels(entry, float(sig.metrics.get("atr", entry * 0.01)))
 
             pos = Position(
                 symbol=sig.symbol,
@@ -1265,22 +1195,12 @@ class KrakenTradingBot:
                     "fee": {"cost": 0.0},
                 }
             else:
-                order = self.call(
-                    self.exchange.create_market_sell_order,
-                    symbol,
-                    amount,
-                )
+                order = self.call(self.exchange.create_market_sell_order, symbol, amount)
 
             exit_price = float(order.get("average") or order.get("price") or fallback_price)
             fees = self.extract_fees(order)
 
-            closed = self.risk.close(
-                symbol,
-                exit_price,
-                reason,
-                fees,
-                str(order.get("id", "")),
-            )
+            closed = self.risk.close(symbol, exit_price, reason, fees, str(order.get("id", "")))
 
             if not closed:
                 return
@@ -1300,6 +1220,28 @@ class KrakenTradingBot:
             self.last_error = str(exc)
             LOGGER.exception("Errore chiusura trade %s: %s", symbol, exc)
             self.telegram.send(f"Errore chiusura trade {symbol}: {exc}")
+
+    def adjust_capital_for_market_limits(self, symbol: str, capital: float, quote_free: float) -> float:
+        try:
+            if capital <= 0:
+                return 0.0
+
+            limits = self.markets.get(symbol, {}).get("limits", {}) or {}
+            cost_min = (limits.get("cost", {}) or {}).get("min")
+            available = max(0.0, quote_free * 0.95)
+            max_amount = max(self.cfg.min_trade_amount, self.cfg.max_trade_amount)
+
+            if cost_min is not None:
+                minimum = float(cost_min) * 1.01
+
+                if capital < minimum:
+                    if minimum <= available and minimum <= max_amount:
+                        return minimum
+                    return 0.0
+
+            return min(capital, available, max_amount)
+        except Exception:
+            return capital
 
     def fetch_price(self, symbol: str) -> float:
         try:
@@ -1389,6 +1331,8 @@ class KrakenTradingBot:
             "STATUS BOT\n"
             f"Trading attivo: {self.trading_enabled}\n"
             f"Dry run: {self.cfg.dry_run}\n"
+            f"Min trade: {self.cfg.min_trade_amount:.2f}\n"
+            f"Max trade: {self.cfg.max_trade_amount:.2f}\n"
             f"Mercati monitorati: {len(self.symbols)}\n"
             f"Coin liquide ultimo scan: {self.liquid_count}\n"
             f"Trade aperti: {len(self.risk.positions)}/{self.cfg.max_open_trades}\n"
