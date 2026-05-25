@@ -639,7 +639,6 @@ class RiskManager:
         ratio = max(0.0, min(1.0, (score - score_min) / score_range))
         desired = capital_min + ratio * (capital_max - capital_min)
 
-        # Garantisce sempre almeno capital_min se il saldo lo permette
         return max(capital_min, min(desired, capital_max, available))
 
     def levels(self, entry: float, atr: float) -> Dict[str, float]:
@@ -1266,9 +1265,10 @@ class KrakenTradingBot:
             available = max(0.0, quote_free * 0.95)
             max_cap = self.cfg.max_trade_amount
 
-            needed = capital
+            # Parte sempre dal minimo configurato (1 EUR), mai sotto
+            needed = max(capital, self.cfg.min_trade_amount)
 
-            # Minimo costo in valuta quote
+            # Minimo costo in valuta quote imposto da Kraken
             if cost_min_raw is not None:
                 needed = max(needed, float(cost_min_raw) * 1.01)
 
@@ -1278,12 +1278,11 @@ class KrakenTradingBot:
                 if price > 0:
                     needed = max(needed, float(amount_min_raw) * price * 1.01)
 
-            # Saldo insufficiente anche solo per il minimo Kraken → blocca
+            # Saldo insufficiente anche solo per il minimo → blocca
             if needed > available:
                 return 0.0
 
             # Restituisce il massimo tra needed e capital, clampato a max_cap e available
-            # Non va MAI sotto il minimo necessario per Kraken
             return min(max(needed, capital), max_cap, available)
 
         except Exception:
@@ -1676,4 +1675,5 @@ class KrakenTradingBot:
 if __name__ == "__main__":
     print("Avvio container Railway...", flush=True)
     start_health_server()
-    KrakenTradingBot().run()
+    bot = KrakenTradingBot()
+    bot.run()
