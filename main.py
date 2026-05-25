@@ -108,35 +108,40 @@ class Config:
     retry_attempts: int = env_int("RETRY_ATTEMPTS", 4)
     retry_sleep_seconds: float = env_float("RETRY_SLEEP_SECONDS", 2.0)
 
-    min_24h_quote_volume_eur: float = env_float("MIN_24H_QUOTE_VOLUME_EUR", 250000.0)
+    # Abbassato da 250k a 30k: i mercati EUR hanno meno volume di quelli USD
+    min_24h_quote_volume_eur: float = env_float("MIN_24H_QUOTE_VOLUME_EUR", 30000.0)
     max_open_trades: int = min(env_int("MAX_OPEN_TRADES", 3), 3)
-    min_trade_amount: float = env_float("MIN_TRADE_AMOUNT", 0.45)
-    max_trade_amount: float = env_float("MAX_TRADE_AMOUNT", 1.35)
+    min_trade_amount: float = env_float("MIN_TRADE_AMOUNT", 1.0)
+    max_trade_amount: float = env_float("MAX_TRADE_AMOUNT", 3.0)
     daily_max_loss: float = min(env_float("DAILY_MAX_LOSS", 0.05), 0.05)
 
     ema_fast: int = env_int("EMA_FAST", 20)
     ema_slow: int = env_int("EMA_SLOW", 50)
     rsi_period: int = env_int("RSI_PERIOD", 14)
-    rsi_buy_min: float = env_float("RSI_BUY_MIN", 50.0)
-    rsi_buy_max: float = env_float("RSI_BUY_MAX", 70.0)
+    rsi_buy_min: float = env_float("RSI_BUY_MIN", 45.0)
+    rsi_buy_max: float = env_float("RSI_BUY_MAX", 72.0)
     rsi_exit: float = env_float("RSI_EXIT", 78.0)
     atr_period: int = env_int("ATR_PERIOD", 14)
     volume_window: int = env_int("VOLUME_WINDOW", 20)
-    volume_breakout_multiplier: float = env_float("VOLUME_BREAKOUT_MULTIPLIER", 1.35)
+    volume_breakout_multiplier: float = env_float("VOLUME_BREAKOUT_MULTIPLIER", 1.2)
     breakout_lookback: int = env_int("BREAKOUT_LOOKBACK", 20)
     momentum_lookback: int = env_int("MOMENTUM_LOOKBACK", 5)
 
-    min_atr_percent: float = env_float("MIN_ATR_PERCENT", 0.002)
-    max_atr_percent: float = env_float("MAX_ATR_PERCENT", 0.18)
+    min_atr_percent: float = env_float("MIN_ATR_PERCENT", 0.001)
+    max_atr_percent: float = env_float("MAX_ATR_PERCENT", 0.20)
     stop_loss_atr_multiplier: float = env_float("STOP_LOSS_ATR_MULTIPLIER", 2.0)
     take_profit_atr_multiplier: float = env_float("TAKE_PROFIT_ATR_MULTIPLIER", 3.0)
     trailing_atr_multiplier: float = env_float("TRAILING_ATR_MULTIPLIER", 2.0)
-    max_stop_loss_percent: float = env_float("MAX_STOP_LOSS_PERCENT", 0.04)
-    min_take_profit_percent: float = env_float("MIN_TAKE_PROFIT_PERCENT", 0.025)
+    max_stop_loss_percent: float = env_float("MAX_STOP_LOSS_PERCENT", 0.05)
+    min_take_profit_percent: float = env_float("MIN_TAKE_PROFIT_PERCENT", 0.02)
+
+    # Soglia score per aprire un trade (su ~120 punti max).
+    # 90 = segnale forte. Abbassa con BUY_SCORE_THRESHOLD per più trade, alza per più selettività.
+    buy_score_threshold: float = env_float("BUY_SCORE_THRESHOLD", 90.0)
 
     max_consecutive_losses: int = env_int("MAX_CONSECUTIVE_LOSSES", 3)
     loss_cooldown_seconds: int = env_int("LOSS_COOLDOWN_SECONDS", 10800)
-    min_seconds_between_trades: int = env_int("MIN_SECONDS_BETWEEN_TRADES", 600)
+    min_seconds_between_trades: int = env_int("MIN_SECONDS_BETWEEN_TRADES", 300)
     symbol_cooldown_seconds: int = env_int("SYMBOL_COOLDOWN_SECONDS", 3600)
     telegram_signal_interval_seconds: int = env_int("TELEGRAM_SIGNAL_INTERVAL_SECONDS", 1800)
     top_signals_limit: int = env_int("TOP_SIGNALS_LIMIT", 10)
@@ -216,6 +221,12 @@ class TelegramPanel:
 
                 response = self.session.get(f"{self.base_url}/getUpdates", params=params, timeout=35)
 
+                if response.status_code == 409:
+                    # Un'altra istanza del bot è già accesa: aspetta e riprova
+                    LOGGER.warning("Telegram 409: altra istanza attiva, attendo 30s prima di riprovare")
+                    time.sleep(30)
+                    continue
+
                 if response.status_code >= 400:
                     LOGGER.error("Telegram getUpdates %s: %s", response.status_code, response.text[:500])
                     time.sleep(5)
@@ -241,7 +252,8 @@ class TelegramPanel:
             if chat_id != self.chat_id or not text.startswith("/"):
                 return
 
-            command = text.split()[0].split("@")[0].replace("/", "").lower()
+            parts = text.split()
+            command = parts[0].split("@")[0].replace("/", "").lower()
             handler = self.handlers.get(command)
 
             if not handler:
@@ -264,6 +276,7 @@ class Signal:
     score: float
     buy: bool
     reasons: List[str]
+    blocked_by: List[str]
     metrics: Dict[str, float]
     timestamp: str
 
@@ -361,19 +374,26 @@ class Strategy:
 
             score = 0.0
             reasons: List[str] = []
+            blocked_by: List[str] = []
 
             if liquid:
                 score += 15
                 reasons.append("liquido")
+            else:
+                blocked_by.append(f"vol24h basso ({quote_volume_24h:.0f} EUR)")
 
             if trend_up:
                 ema_strength = min(max((ema20 - ema50) / max(price, 1e-12), 0.0) * 100.0, 8.0)
                 score += 20 + ema_strength
-                reasons.append("EMA20 sopra EMA50")
+                reasons.append("EMA20>EMA50")
+            else:
+                blocked_by.append("trend ribassista")
 
             if rsi_ok:
                 score += 15
-                reasons.append("RSI valido")
+                reasons.append(f"RSI {rsi:.1f}")
+            else:
+                blocked_by.append(f"RSI fuori range ({rsi:.1f})")
 
             if volume_breakout:
                 volume_strength = min(
@@ -381,31 +401,32 @@ class Strategy:
                     12.0,
                 )
                 score += 20 + volume_strength
-                reasons.append("volume breakout")
+                reasons.append(f"vol x{volume / max(volume_avg, 1e-12):.1f}")
+            else:
+                blocked_by.append(f"vol normale ({volume / max(volume_avg, 1e-12):.2f}x)")
 
             if breakout:
                 breakout_strength = min(max(price / max(breakout_high, 1e-12) - 1.0, 0.0) * 100.0, 8.0)
                 score += 20 + breakout_strength
-                reasons.append("breakout rialzista")
+                reasons.append("breakout")
+            else:
+                blocked_by.append("no breakout")
 
             if momentum_positive:
                 momentum_strength = min(max(momentum, 0.0) * 100.0, 10.0)
                 score += 10 + momentum_strength
-                reasons.append("momentum positivo")
+                reasons.append(f"mom +{momentum * 100:.2f}%")
+            else:
+                blocked_by.append(f"mom neg ({momentum * 100:.2f}%)")
 
             if volatility_ok:
                 score += 10
-                reasons.append("volatilita valida")
+                reasons.append(f"ATR {atr_percent * 100:.2f}%")
+            else:
+                blocked_by.append(f"volatilita fuori range ({atr_percent * 100:.2f}%)")
 
-            buy = all([
-                liquid,
-                trend_up,
-                rsi_ok,
-                volume_breakout,
-                breakout,
-                momentum_positive,
-                volatility_ok,
-            ])
+            # BUY: score >= soglia + trend rialzista obbligatorio
+            buy = score >= self.cfg.buy_score_threshold and trend_up
 
             return Signal(
                 symbol=symbol,
@@ -413,6 +434,7 @@ class Strategy:
                 score=round(score, 2),
                 buy=buy,
                 reasons=reasons,
+                blocked_by=blocked_by,
                 metrics={
                     "ema20": ema20,
                     "ema50": ema50,
@@ -575,7 +597,7 @@ class RiskManager:
             return False, "limite massimo trade aperti"
 
         if quote_free < self.cfg.min_trade_amount:
-            return False, "saldo troppo basso per minimo trade"
+            return False, f"saldo insufficiente ({quote_free:.2f} EUR < {self.cfg.min_trade_amount:.2f} EUR)"
 
         if self.daily_stop_hit():
             return False, "stop giornaliero perdita attivo"
@@ -584,7 +606,8 @@ class RiskManager:
             return False, f"pausa rischio attiva {self.pause_minutes()} min"
 
         if now - self.last_trade_at < self.cfg.min_seconds_between_trades:
-            return False, "anti-overtrading attivo"
+            remaining = int(self.cfg.min_seconds_between_trades - (now - self.last_trade_at))
+            return False, f"anti-overtrading attivo ({remaining}s)"
 
         if now - self.symbol_last_trade_at.get(symbol, 0.0) < self.cfg.symbol_cooldown_seconds:
             return False, "cooldown simbolo attivo"
@@ -597,36 +620,19 @@ class RiskManager:
         if available < self.cfg.min_trade_amount:
             return 0.0
 
-        max_amount = max(self.cfg.min_trade_amount, self.cfg.max_trade_amount)
-        multiplier = 1.0
+        # Scala lineare: score 90 → 1 EUR, score 120 → 3 EUR
+        # Formula: 1 + (score - 90) / 30 * 2, clampato tra 1 e 3
+        score = float(signal_data.score) if signal_data is not None else self.cfg.buy_score_threshold
+        score_min = self.cfg.buy_score_threshold          # 90
+        score_max = 120.0
+        capital_min = self.cfg.min_trade_amount           # 1.0 EUR
+        capital_max = self.cfg.max_trade_amount           # 3.0 EUR
 
-        if signal_data is not None:
-            metrics = signal_data.metrics
-            volume_ratio = float(metrics.get("volume_ratio", 1.0) or 1.0)
-            momentum = float(metrics.get("momentum", 0.0) or 0.0)
-            rsi = float(metrics.get("rsi", 50.0) or 50.0)
-            atr_percent = float(metrics.get("atr_percent", 0.0) or 0.0)
+        score_range = max(score_max - score_min, 1.0)
+        ratio = max(0.0, min(1.0, (score - score_min) / score_range))
+        desired = capital_min + ratio * (capital_max - capital_min)
 
-            strength = 0
-
-            if signal_data.score >= 105:
-                strength += 1
-            if signal_data.score >= 115:
-                strength += 1
-            if volume_ratio >= 2.0:
-                strength += 1
-            if momentum >= 0.01:
-                strength += 1
-            if 55 <= rsi <= 65:
-                strength += 1
-            if 0.004 <= atr_percent <= 0.08:
-                strength += 1
-
-            multiplier = 1.0 + min(strength, 4) * 0.5
-
-        desired = self.cfg.min_trade_amount * multiplier
-
-        return max(0.0, min(desired, max_amount, available))
+        return max(0.0, min(desired, capital_max, available))
 
     def levels(self, entry: float, atr: float) -> Dict[str, float]:
         atr = max(float(atr), entry * self.cfg.min_atr_percent)
@@ -761,6 +767,7 @@ class KrakenTradingBot:
 
         self.scan_count = 0
         self.liquid_count = 0
+        self.buy_signals_count = 0
         self.last_scan_start = "n/d"
         self.last_scan_end = "n/d"
         self.last_market_reload = 0.0
@@ -777,6 +784,8 @@ class KrakenTradingBot:
         self.telegram.register("segnali", lambda _: self.format_signals())
         self.telegram.register("start", lambda _: self.cmd_start())
         self.telegram.register("stop", lambda _: self.cmd_stop())
+        self.telegram.register("chiudi", lambda text: self.cmd_chiudi(text))
+        self.telegram.register("diagnostica", lambda _: self.cmd_diagnostica())
         self.telegram.register("help", lambda _: self.cmd_help())
 
     def now_iso(self) -> str:
@@ -846,11 +855,13 @@ class KrakenTradingBot:
 
         self.telegram.send(
             "Bot avviato\n"
-            "Exchange: Kraken reale\n"
+            "Exchange: Kraken\n"
             f"Timeframe: {self.cfg.timeframe}\n"
             f"Dry run: {self.cfg.dry_run}\n"
             f"Min trade: {self.cfg.min_trade_amount:.2f} EUR\n"
-            f"Max trade: {self.cfg.max_trade_amount:.2f} EUR"
+            f"Max trade: {self.cfg.max_trade_amount:.2f} EUR\n"
+            f"Score minimo acquisto: {self.cfg.buy_score_threshold:.0f}\n"
+            f"Volume minimo 24h: {self.cfg.min_24h_quote_volume_eur:.0f} EUR"
         )
 
         self.load_markets()
@@ -956,6 +967,7 @@ class KrakenTradingBot:
 
         signals: List[Signal] = []
         liquid = 0
+        buy_count = 0
         errors = 0
 
         LOGGER.info("Inizio scan mercato: %s simboli", len(self.symbols))
@@ -985,7 +997,17 @@ class KrakenTradingBot:
                     liquid += 1
 
                 if sig.buy:
+                    buy_count += 1
+                    LOGGER.info(
+                        "Segnale BUY %s | score %.1f | %s",
+                        symbol, sig.score, ", ".join(sig.reasons)
+                    )
                     self.open_trade(sig)
+                else:
+                    LOGGER.debug(
+                        "No buy %s | score %.1f | bloccato: %s",
+                        symbol, sig.score, ", ".join(sig.blocked_by)
+                    )
 
                 time.sleep(self.cfg.per_symbol_delay_seconds)
 
@@ -1002,13 +1024,12 @@ class KrakenTradingBot:
         )[:self.cfg.top_signals_limit]
 
         self.liquid_count = liquid
+        self.buy_signals_count = buy_count
         self.last_scan_end = self.now_iso()
 
         LOGGER.info(
-            "Scan completato: mercati=%s liquidi=%s errori=%s",
-            len(self.symbols),
-            liquid,
-            errors,
+            "Scan completato: mercati=%s liquidi=%s buy=%s errori=%s",
+            len(self.symbols), liquid, buy_count, errors,
         )
 
         if time.time() - self.last_signal_report >= self.cfg.telegram_signal_interval_seconds:
@@ -1069,12 +1090,23 @@ class KrakenTradingBot:
 
     def open_trade(self, sig: Signal) -> None:
         try:
+            LOGGER.info(
+                ">>> Tentativo trade %s | score=%.1f | prezzo=%.6g",
+                sig.symbol, sig.score, sig.price,
+            )
+
             if not self.trading_enabled:
+                msg = f"Trade bloccato {sig.symbol}: trading disattivato (/start per riattivare)"
+                LOGGER.info(msg)
+                self.telegram.send(msg)
                 return
 
             market = self.markets.get(sig.symbol)
 
             if not market:
+                msg = f"Trade bloccato {sig.symbol}: mercato non trovato nei dati Kraken"
+                LOGGER.info(msg)
+                self.telegram.send(msg)
                 return
 
             quote = str(market.get("quote", "")).upper()
@@ -1083,28 +1115,77 @@ class KrakenTradingBot:
             self.refresh_balance(send=False)
 
             free = self.last_balance.get("free", {}) or {}
+
+            # Kraken può restituire il saldo EUR come "EUR" o "ZEUR" — proviamo entrambi
             quote_free = float(free.get(quote, 0.0) or 0.0)
+            if quote_free <= 0 and quote == "EUR":
+                quote_free = float(free.get("ZEUR", 0.0) or 0.0)
+
+            LOGGER.info(
+                "Saldo disponibile per %s: %.4f %s (chiavi saldo: %s)",
+                sig.symbol, quote_free, quote,
+                ", ".join(str(k) for k in free.keys()) if free else "vuoto",
+            )
 
             allowed, reason = self.risk.can_open(sig.symbol, quote_free)
 
             if not allowed:
-                LOGGER.info("Segnale ignorato %s: %s", sig.symbol, reason)
+                msg = f"Trade bloccato {sig.symbol}: {reason}"
+                LOGGER.info(msg)
+                self.telegram.send(msg)
                 return
 
             capital = self.risk.trade_capital(quote_free, sig)
+            LOGGER.info(
+                "Capitale calcolato %s: %.4f %s (free=%.4f)",
+                sig.symbol, capital, quote, quote_free,
+            )
             capital = self.adjust_capital_for_market_limits(sig.symbol, capital, quote_free)
+            LOGGER.info(
+                "Capitale dopo limiti Kraken %s: %.4f %s",
+                sig.symbol, capital, quote,
+            )
 
             if capital <= 0:
-                LOGGER.info("Segnale ignorato %s: capitale sotto minimo Kraken", sig.symbol)
+                limits = self.markets.get(sig.symbol, {}).get("limits", {}) or {}
+                cost_min = (limits.get("cost", {}) or {}).get("min", "n/d")
+                msg = (
+                    f"Trade bloccato {sig.symbol}: capitale insufficiente per i minimi Kraken\n"
+                    f"Capitale: {capital:.4f} {quote} | Minimo ordine: {cost_min} {quote} | "
+                    f"Saldo free: {quote_free:.4f} {quote}"
+                )
+                LOGGER.info(msg)
+                self.telegram.send(msg)
                 return
 
             amount = capital / sig.price
+            amount_raw = amount
             amount = float(self.exchange.amount_to_precision(sig.symbol, amount))
 
+            LOGGER.info(
+                "Quantita %s: %.8f (raw=%.8f, precision applicata)",
+                sig.symbol, amount, amount_raw,
+            )
+
             if amount <= 0:
+                msg = (
+                    f"Trade bloccato {sig.symbol}: quantita arrotondata a 0 dalla precisione Kraken\n"
+                    f"(capitale={capital:.4f} {quote}, prezzo={sig.price:.6g}, amount raw={amount_raw:.10f})"
+                )
+                LOGGER.info(msg)
+                self.telegram.send(msg)
                 return
 
             if not self.check_market_limits(sig.symbol, amount, capital):
+                limits = self.markets.get(sig.symbol, {}).get("limits", {}) or {}
+                amt_min = (limits.get("amount", {}) or {}).get("min", "n/d")
+                cost_min = (limits.get("cost", {}) or {}).get("min", "n/d")
+                msg = (
+                    f"Trade bloccato {sig.symbol}: limiti mercato Kraken non rispettati\n"
+                    f"amount={amount:.8f} (min={amt_min}) | cost={capital:.4f} (min={cost_min}) {quote}"
+                )
+                LOGGER.info(msg)
+                self.telegram.send(msg)
                 return
 
             if self.cfg.dry_run:
@@ -1297,19 +1378,36 @@ class KrakenTradingBot:
 
     def format_signals(self) -> str:
         if not self.best_signals:
-            return "SEGNALI\nNessun segnale disponibile."
+            return "SEGNALI\nNessun segnale disponibile. Attendi il prossimo scan."
 
-        lines = ["MIGLIORI SEGNALI"]
+        soglia = self.cfg.buy_score_threshold
+        lines = [
+            f"SEGNALI — soglia buy: {soglia:.0f}/120",
+            f"Scan: {self.last_scan_end} | Liquide: {self.liquid_count} | BUY: {self.buy_signals_count}",
+            "─" * 32,
+        ]
 
         for index, sig in enumerate(self.best_signals, 1):
             m = sig.metrics
+            rsi = m.get("rsi", 0.0)
+            vol_ratio = m.get("volume_ratio", 0.0)
+            momentum = m.get("momentum", 0.0)
+            atr_pct = m.get("atr_percent", 0.0)
+            vol24 = m.get("quote_volume_24h", 0.0)
+
+            if sig.buy:
+                stato = "✅ BUY"
+                dettaglio = f"motivi: {', '.join(sig.reasons)}"
+            else:
+                stato = f"❌ NO (score {sig.score:.0f}/{soglia:.0f})"
+                dettaglio = "bloccato da: " + "; ".join(sig.blocked_by) if sig.blocked_by else "score insufficiente"
 
             lines.append(
-                f"{index}. {sig.symbol} | score {sig.score:.2f} | "
-                f"prezzo {sig.price:.10g} | RSI {m.get('rsi', 0):.1f} | "
-                f"vol x{m.get('volume_ratio', 0):.2f} | "
-                f"mom {m.get('momentum', 0) * 100:.2f}% | "
-                f"BUY {'SI' if sig.buy else 'NO'}"
+                f"{index}. {sig.symbol} | {stato}\n"
+                f"   prezzo {sig.price:.6g} | score {sig.score:.0f}\n"
+                f"   RSI {rsi:.1f} | vol x{vol_ratio:.2f} | mom {momentum*100:+.2f}% | ATR {atr_pct*100:.2f}%\n"
+                f"   vol24h {vol24:,.0f} EUR\n"
+                f"   {dettaglio}"
             )
 
         return "\n".join(lines)
@@ -1325,8 +1423,11 @@ class KrakenTradingBot:
             f"Dry run: {self.cfg.dry_run}\n"
             f"Min trade: {self.cfg.min_trade_amount:.2f} EUR\n"
             f"Max trade: {self.cfg.max_trade_amount:.2f} EUR\n"
+            f"Score minimo buy: {self.cfg.buy_score_threshold:.0f}\n"
+            f"Volume minimo 24h: {self.cfg.min_24h_quote_volume_eur:.0f} EUR\n"
             f"Mercati monitorati: {len(self.symbols)}\n"
             f"Coin liquide ultimo scan: {self.liquid_count}\n"
+            f"Segnali BUY ultimo scan: {self.buy_signals_count}\n"
             f"Trade aperti: {len(self.risk.positions)}/{self.cfg.max_open_trades}\n"
             f"Equity: {self.current_equity:.2f} EUR\n"
             f"PnL giornaliero: {self.risk.daily_realized_pnl:.2f} EUR\n"
@@ -1350,10 +1451,10 @@ class KrakenTradingBot:
             pnl = (price - pos.entry_price) * pos.amount
 
             lines.append(
-                f"{pos.symbol} | qty {pos.amount:.10g} | "
-                f"entry {pos.entry_price:.10g} | last {price:.10g} | "
+                f"{pos.symbol} | qty {pos.amount:.6g} | "
+                f"entry {pos.entry_price:.6g} | last {price:.6g} | "
                 f"PnL {pnl:.2f} {pos.quote} | "
-                f"SL {pos.stop_loss:.10g} | TS {pos.trailing_stop:.10g} | TP {pos.take_profit:.10g}"
+                f"SL {pos.stop_loss:.6g} | TS {pos.trailing_stop:.6g} | TP {pos.take_profit:.6g}"
             )
 
         lines.append("")
@@ -1392,6 +1493,7 @@ class KrakenTradingBot:
             f"Coin liquide ultimo scan: {self.liquid_count}\n"
             f"Timeframe: {self.cfg.timeframe}\n"
             f"Volume minimo 24h: {self.cfg.min_24h_quote_volume_eur:.0f} EUR\n"
+            f"Score minimo buy: {self.cfg.buy_score_threshold:.0f}\n"
             f"Scan completati: {self.scan_count}"
         )
 
@@ -1403,18 +1505,113 @@ class KrakenTradingBot:
         self.trading_enabled = False
         return "Trading sospeso. Le posizioni aperte restano gestite."
 
+    def cmd_chiudi(self, text: str) -> str:
+        parts = text.strip().split()
+        if len(parts) < 2:
+            if not self.risk.positions:
+                return "Nessun trade aperto."
+            aperte = ", ".join(self.risk.positions.keys())
+            return f"Uso: /chiudi SIMBOLO\nTrade aperti: {aperte}"
+
+        symbol = parts[1].upper()
+
+        if symbol not in self.risk.positions:
+            aperte = ", ".join(self.risk.positions.keys()) or "nessuno"
+            return f"Nessuna posizione aperta su {symbol}.\nTrade aperti: {aperte}"
+
+        price = self.fetch_price(symbol)
+        if price <= 0:
+            price = self.risk.positions[symbol].entry_price
+
+        self.close_trade(symbol, "chiusura manuale", price)
+        return f"Chiusura manuale {symbol} avviata al prezzo ~{price:.6g}"
+
+    def cmd_diagnostica(self) -> str:
+        lines = ["DIAGNOSTICA BOT"]
+
+        # --- Saldo raw Kraken ---
+        try:
+            self.refresh_balance(send=False)
+            free = self.last_balance.get("free", {}) or {}
+            total = self.last_balance.get("total", {}) or {}
+
+            non_zero_free = {k: v for k, v in free.items() if v and float(v) > 0}
+            non_zero_total = {k: v for k, v in total.items() if v and float(v) > 0}
+
+            lines.append("\nSALDO RAW KRAKEN (chiavi con valore > 0):")
+            if non_zero_free:
+                for k, v in non_zero_free.items():
+                    lines.append(f"  free[{k}] = {float(v):.6f}")
+            else:
+                lines.append("  (nessun saldo libero trovato)")
+
+            lines.append("Totale:")
+            if non_zero_total:
+                for k, v in non_zero_total.items():
+                    lines.append(f"  total[{k}] = {float(v):.6f}")
+            else:
+                lines.append("  (nessun saldo trovato)")
+
+            lines.append(f"Equity stimata: {self.current_equity:.4f} EUR")
+
+        except Exception as exc:
+            lines.append(f"Errore fetch saldo: {exc}")
+
+        # --- Config trade ---
+        lines.append("\nCONFIG TRADE:")
+        lines.append(f"  min_trade_amount: {self.cfg.min_trade_amount:.2f} EUR")
+        lines.append(f"  max_trade_amount: {self.cfg.max_trade_amount:.2f} EUR")
+        lines.append(f"  buy_score_threshold: {self.cfg.buy_score_threshold:.0f}")
+        lines.append(f"  min_24h_volume: {self.cfg.min_24h_quote_volume_eur:.0f} EUR")
+        lines.append(f"  max_open_trades: {self.cfg.max_open_trades}")
+        lines.append(f"  trading_enabled: {self.trading_enabled}")
+        lines.append(f"  dry_run: {self.cfg.dry_run}")
+
+        # --- Stato risk ---
+        lines.append("\nSTATO RISK:")
+        lines.append(f"  trade aperti: {len(self.risk.positions)}/{self.cfg.max_open_trades}")
+        lines.append(f"  perdite consecutive: {self.risk.consecutive_losses}/{self.cfg.max_consecutive_losses}")
+        lines.append(f"  pausa rischio: {self.risk.pause_minutes()} min")
+        lines.append(f"  stop giornaliero: {self.risk.daily_stop_hit()}")
+        since_last = int(time.time() - self.risk.last_trade_at) if self.risk.last_trade_at > 0 else -1
+        lines.append(f"  secondi dall'ultimo trade: {since_last} (min={self.cfg.min_seconds_between_trades})")
+
+        # --- Limiti mercato top segnali ---
+        if self.best_signals:
+            lines.append("\nLIMITI MERCATO (top 5 segnali):")
+            for sig in self.best_signals[:5]:
+                try:
+                    mkt = self.markets.get(sig.symbol, {})
+                    limits = mkt.get("limits", {}) or {}
+                    cost_min = (limits.get("cost", {}) or {}).get("min", "n/d")
+                    amt_min = (limits.get("amount", {}) or {}).get("min", "n/d")
+                    precision = mkt.get("precision", {}) or {}
+                    amt_prec = precision.get("amount", "n/d")
+                    lines.append(
+                        f"  {sig.symbol}: cost_min={cost_min} EUR | "
+                        f"amt_min={amt_min} | amt_precision={amt_prec}"
+                    )
+                except Exception:
+                    lines.append(f"  {sig.symbol}: errore lettura limiti")
+        else:
+            lines.append("\nNessun segnale disponibile per mostrare limiti mercato.")
+
+        return "\n".join(lines)
+
     def cmd_help(self) -> str:
         return (
             "COMANDI\n"
-            "/saldo\n"
-            "/status\n"
-            "/trades\n"
-            "/profitto\n"
-            "/mercato\n"
-            "/segnali\n"
-            "/start\n"
-            "/stop\n"
-            "/help"
+            "/saldo — saldo account\n"
+            "/status — stato completo bot\n"
+            "/trades — trade aperti e ultimi chiusi\n"
+            "/profitto — PnL realizzato e aperto\n"
+            "/mercato — info mercato\n"
+            "/segnali — segnali con score e motivo buy/no buy\n"
+            "/diagnostica — saldo raw Kraken + limiti mercato\n"
+            "/start — riattiva trading\n"
+            "/stop — sospendi trading\n"
+            "/chiudi SIMBOLO — es. /chiudi BTC/EUR\n"
+            "/help — questo messaggio"
         )
 
     def request_shutdown(self, signum: int, frame: Any) -> None:
