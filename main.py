@@ -147,9 +147,9 @@ class Config:
     max_total_risk:                   float = env_float("MAX_TOTAL_RISK", 0.15)
 
     # Portfolio allocation fractions (of available / open_slots)
-    alloc_extreme:  float = env_float("ALLOC_EXTREME",  0.40)   # score >= 110
-    alloc_high:     float = env_float("ALLOC_HIGH",     0.33)   # score >= 100
-    alloc_normal:   float = env_float("ALLOC_NORMAL",   0.25)   # default
+    alloc_extreme:  float = env_float("ALLOC_EXTREME",  0.35)   # score >= 110
+    alloc_high:     float = env_float("ALLOC_HIGH",     0.28)   # score >= 100
+    alloc_normal:   float = env_float("ALLOC_NORMAL",   0.20)   # default
 
     # Replacement thresholds
     replace_score_diff:    float = env_float("REPLACE_SCORE_DIFF",    15.0)
@@ -163,14 +163,14 @@ class Config:
     atr_period: int = env_int("ATR_PERIOD", 14)
 
     # Buy conditions
-    rsi_buy_min:              float = env_float("RSI_BUY_MIN",              60.0)
-    rsi_buy_max:              float = env_float("RSI_BUY_MAX",              67.0)
+    rsi_buy_min:              float = env_float("RSI_BUY_MIN",              55.0)
+    rsi_buy_max:              float = env_float("RSI_BUY_MAX",              70.0)
     rsi_exit:                 float = env_float("RSI_EXIT",                 82.0)
     max_rsi_allowed:          float = env_float("MAX_RSI_ALLOWED",          72.0)
-    momentum_min:             float = env_float("MOMENTUM_MIN",             0.018)
-    momentum_max:             float = env_float("MOMENTUM_MAX",             0.042)
+    momentum_min:             float = env_float("MOMENTUM_MIN",             0.012)
+    momentum_max:             float = env_float("MOMENTUM_MAX",             0.055)
     sell_momentum_min:        float = env_float("SELL_MOMENTUM_MIN",        0.005)
-    volume_breakout_multiplier: float = env_float("VOLUME_BREAKOUT_MULTIPLIER", 3.0)
+    volume_breakout_multiplier: float = env_float("VOLUME_BREAKOUT_MULTIPLIER", 1.8)
     volume_collapse_threshold: float = env_float("VOLUME_COLLAPSE_THRESHOLD", 0.6)
     volume_window:            int   = env_int("VOLUME_WINDOW",              20)
     breakout_lookback:        int   = env_int("BREAKOUT_LOOKBACK",          20)
@@ -178,7 +178,7 @@ class Config:
     momentum_lookback:        int   = env_int("MOMENTUM_LOOKBACK",          5)
     min_atr_percent:          float = env_float("MIN_ATR_PERCENT",          0.01)
     max_atr_percent:          float = env_float("MAX_ATR_PERCENT",          0.05)
-    buy_score_threshold:      float = env_float("BUY_SCORE_THRESHOLD",      92.0)
+    buy_score_threshold:      float = env_float("BUY_SCORE_THRESHOLD",      84.0)
 
     # Stop loss / trailing / TP
     stop_loss_atr_multiplier:    float = env_float("STOP_LOSS_ATR_MULTIPLIER",    1.5)
@@ -204,7 +204,7 @@ class Config:
     top_signals_limit:                int = env_int("TOP_SIGNALS_LIMIT", 10)
 
     # Fear & Greed
-    fear_greed_min: int = env_int("FEAR_GREED_MIN", 45)
+    fear_greed_min: int = env_int("FEAR_GREED_MIN", 30)
     fear_greed_max: int = env_int("FEAR_GREED_MAX", 72)
 
     # Execution
@@ -243,8 +243,10 @@ class TelegramPanel:
         if not self.enabled:
             LOGGER.info("Telegram disattivato: %s", text.replace("\n", " | ")[:300])
             return False
+
         try:
             ok = True
+
             for start in range(0, len(text), 3900):
                 resp = self.session.post(
                     f"{self.base_url}/sendMessage",
@@ -252,14 +254,23 @@ class TelegramPanel:
                         "chat_id": self.chat_id,
                         "text": text[start:start + 3900],
                         "disable_notification": silent,
+                        "parse_mode": "HTML",
                     },
                     timeout=20,
                 )
+
                 if resp.status_code >= 400:
                     ok = False
-                    LOGGER.error("Errore Telegram %s: %s", resp.status_code, resp.text[:500])
+                    LOGGER.error(
+                        "Errore Telegram %s: %s",
+                        resp.status_code,
+                        resp.text[:500],
+                    )
+
                 time.sleep(0.2)
+
             return ok
+
         except Exception as exc:
             LOGGER.exception("Errore invio Telegram: %s", exc)
             return False
@@ -883,6 +894,19 @@ class KrakenTradingBot:
     def now_iso(self) -> str:
         return datetime.now(timezone.utc).isoformat()
 
+    def emoji_pnl(self, pnl: float) -> str:
+        if pnl > 0:
+            return "🟢"
+        if pnl < 0:
+            return "🔴"
+        return "⚪"
+
+    def emoji_market(self) -> str:
+        return "🟢 BULLISH" if self.btc_bullish else "🔴 BEARISH"
+
+    def format_money(self, value: float) -> str:
+        return f"€{value:,.2f}"
+
     def kraken_env_ok(self) -> bool:
         missing = []
         if not self.cfg.kraken_api_key:
@@ -1372,18 +1396,17 @@ class KrakenTradingBot:
             tp1 = entry * (1.0 + self.cfg.partial_tp_1_percent)
             tp2 = entry * (1.0 + self.cfg.partial_tp_2_percent)
 
-            open_count = len(self.risk.positions)
             self.telegram.send(
-                f"✅ TRADE APERTO [{open_count}/{self.cfg.max_open_trades}]\n"
-                f"{sig.symbol}\n"
-                f"Entry: {entry:.10g} | Qty: {filled:.10g}\n"
-                f"Capitale: {cost:.2f} {quote}\n"
-                f"SL: {pos.stop_loss:.10g}\n"
-                f"Trailing (attiva +{self.cfg.trailing_activation_percent*100:.0f}%): {pos.trailing_stop:.10g}\n"
-                f"TP1 +{self.cfg.partial_tp_1_percent*100:.0f}%: {tp1:.10g} → vende {self.cfg.partial_tp_1_size*100:.0f}%\n"
-                f"TP2 +{self.cfg.partial_tp_2_percent*100:.0f}%: {tp2:.10g} → vende {self.cfg.partial_tp_2_size*100:.0f}%\n"
-                f"Runner {self.cfg.runner_position_size*100:.0f}% con trailing dinamico\n"
-                f"Score: {sig.score:.1f} | {', '.join(sig.reasons)}"
+                f"🟢 <b>TRADE APERTO</b>\n\n"
+                f"🪙 Coin: <b>{sig.symbol}</b>\n"
+                f"💰 Entry: <code>{entry:.10g}</code>\n"
+                f"📦 Qty: <code>{filled:.10g}</code>\n"
+                f"💵 Capitale: <b>{cost:.2f} {quote}</b>\n\n"
+                f"🛡️ Stop Loss: <code>{pos.stop_loss:.10g}</code>\n"
+                f"📈 TP1: <code>{tp1:.10g}</code>\n"
+                f"🚀 TP2: <code>{tp2:.10g}</code>\n\n"
+                f"⭐ Score: <b>{sig.score:.1f}</b>\n"
+                f"📊 Motivi: <i>{', '.join(sig.reasons)}</i>"
             )
 
         except Exception as exc:
@@ -1469,13 +1492,18 @@ class KrakenTradingBot:
             closed     = self.risk.close(symbol, exit_price, reason, fees, str(order.get("id", "")))
             if not closed:
                 return
+
+            emoji = "🟢" if closed['net_pnl'] >= 0 else "🔴"
+
             self.telegram.send(
-                f"🔴 TRADE CHIUSO\n"
-                f"{symbol}\n"
-                f"Motivo: {reason}\n"
-                f"Entry: {closed['entry_price']:.10g} | Exit: {closed['exit_price']:.10g}\n"
-                f"PnL netto: {closed['net_pnl']:.2f} {closed['quote']} ({closed['pnl_percent']:.2f}%)\n"
-                f"Perdite consecutive: {self.risk.consecutive_losses}"
+                f"{emoji} <b>TRADE CHIUSO</b>\n\n"
+                f"🪙 Coin: <b>{symbol}</b>\n"
+                f"📌 Motivo: <b>{reason}</b>\n\n"
+                f"💰 Entry: <code>{closed['entry_price']:.10g}</code>\n"
+                f"💵 Exit: <code>{closed['exit_price']:.10g}</code>\n\n"
+                f"📈 PnL: <b>{closed['net_pnl']:.2f} {closed['quote']}</b>\n"
+                f"📊 Return: <b>{closed['pnl_percent']:.2f}%</b>\n\n"
+                f"⚠️ Loss streak: <b>{self.risk.consecutive_losses}</b>"
             )
         except Exception as exc:
             self.last_error = str(exc)
@@ -1520,46 +1548,51 @@ class KrakenTradingBot:
 
     # ── Formatters ────────────────────────────────────────────────────────
     def format_balance(self) -> str:
-        free  = self.last_balance.get("free",  {}) or {}
+        free = self.last_balance.get("free", {}) or {}
         total = self.last_balance.get("total", {}) or {}
+
+        eur_free = float(free.get("EUR", 0) or 0)
+        eur_total = float(total.get("EUR", 0) or 0)
+
         return (
-            "SALDO ACCOUNT\n"
-            f"Equity stimata: {self.current_equity:.2f} EUR\n"
-            f"EUR free: {float(free.get('EUR', 0) or 0):.2f}\n"
-            f"EUR totale: {float(total.get('EUR', 0) or 0):.2f}\n"
-            f"PnL giornaliero: {self.risk.daily_realized_pnl:.2f} EUR\n"
-            f"Drawdown: {self.risk.current_drawdown * 100:.2f}%"
+            "💰 <b>ACCOUNT OVERVIEW</b>\n\n"
+            f"🏦 Equity stimata: <b>{self.format_money(self.current_equity)}</b>\n"
+            f"💵 EUR Free: <b>{self.format_money(eur_free)}</b>\n"
+            f"📦 EUR Totale: <b>{self.format_money(eur_total)}</b>\n\n"
+            f"📈 PnL giornaliero: <b>{self.format_money(self.risk.daily_realized_pnl)}</b>\n"
+            f"⚠️ Drawdown: <b>{self.risk.current_drawdown * 100:.2f}%</b>"
         )
 
     def format_signals(self) -> str:
         if not self.best_signals:
-            return "SEGNALI\nNessun segnale disponibile."
-        soglia = self.cfg.buy_score_threshold
-        fg     = fetch_fear_greed()
-        lines  = [
-            f"SEGNALI — soglia: {soglia:.0f}",
-            f"Scan: {self.last_scan_end} | Liquide: {self.liquid_count} | BUY: {self.buy_signals_count}",
-            f"BTC: {'🟢 BULLISH' if self.btc_bullish else '🔴 BEARISH'} | "
-            f"F&G: {fg if fg is not None else 'n/d'} (ok: {self.cfg.fear_greed_min}-{self.cfg.fear_greed_max})",
-            f"Portfolio: {len(self.risk.positions)}/{self.cfg.max_open_trades} posizioni",
-            "─" * 32,
+            return "📡 <b>SEGNALI</b>\n\nNessun segnale disponibile"
+
+        fg = fetch_fear_greed()
+
+        lines = [
+            "📡 <b>TOP SIGNALS</b>\n",
+            f"BTC: <b>{self.emoji_market()}</b>",
+            f"Fear & Greed: <b>{fg if fg is not None else 'n/d'}</b>",
+            f"Portfolio: <b>{len(self.risk.positions)}/{self.cfg.max_open_trades}</b>",
+            "━━━━━━━━━━━━━━━━━━",
         ]
+
         for i, sig in enumerate(self.best_signals, 1):
             m = sig.metrics
-            if sig.buy:
-                stato    = "✅ BUY"
-                dettaglio = ", ".join(sig.reasons)
-            else:
-                stato    = f"❌ NO ({sig.score:.0f}/{soglia:.0f})"
-                dettaglio = "; ".join(sig.blocked_by) if sig.blocked_by else "score insufficiente"
+
+            icon = "🟢" if sig.buy else "⚪"
+            status = "BUY" if sig.buy else "WATCH"
+
             lines.append(
-                f"{i}. {sig.symbol} | {stato}\n"
-                f"   {sig.price:.6g} | score {sig.score:.0f}\n"
-                f"   RSI {m.get('rsi',0):.1f} | vol x{m.get('volume_ratio',0):.1f} | "
-                f"mom {m.get('momentum',0)*100:+.2f}% | ATR {m.get('atr_percent',0)*100:.2f}%\n"
-                f"   vol24h {m.get('quote_volume_24h',0):,.0f} EUR\n"
-                f"   {dettaglio}"
+                f"{icon} <b>{i}. {sig.symbol}</b> [{status}]\n"
+                f"💰 Price: <code>{sig.price:.6g}</code>\n"
+                f"⭐ Score: <b>{sig.score:.1f}</b>\n"
+                f"📈 RSI: <b>{m.get('rsi',0):.1f}</b>\n"
+                f"🚀 Momentum: <b>{m.get('momentum',0)*100:+.2f}%</b>\n"
+                f"📊 Volume: <b>x{m.get('volume_ratio',0):.1f}</b>\n"
+                f"🌊 ATR: <b>{m.get('atr_percent',0)*100:.2f}%</b>\n"
             )
+
         return "\n".join(lines)
 
     # ── Telegram commands ─────────────────────────────────────────────────
@@ -1569,49 +1602,74 @@ class KrakenTradingBot:
 
     def cmd_portfolio(self) -> str:
         if not self.risk.positions:
-            return "PORTFOLIO\nNessuna posizione aperta."
-        lines = [f"PORTFOLIO [{len(self.risk.positions)}/{self.cfg.max_open_trades}]"]
-        total_pnl = 0.0
-        for pos in self.risk.positions.values():
-            price   = self.last_prices.get(pos.symbol, pos.entry_price)
-            pnl     = (price - pos.entry_price) * pos.amount
-            pnl_pct = (price - pos.entry_price) / pos.entry_price * 100.0
-            total_pnl += pnl
-            lines.append(
-                f"\n{pos.symbol}\n"
-                f"  Entry {pos.entry_price:.6g} | Last {price:.6g}\n"
-                f"  Qty {pos.amount:.6g} | Costo {pos.quote_cost:.2f} {pos.quote}\n"
-                f"  PnL {pnl:.2f} {pos.quote} ({pnl_pct:+.2f}%)\n"
-                f"  SL {pos.stop_loss:.6g} | TS {pos.trailing_stop:.6g}\n"
-                f"  TP1{'✅' if pos.tp1_done else '⬜'} TP2{'✅' if pos.tp2_done else '⬜'}\n"
-                f"  Score originale: {pos.score:.1f}"
+            return (
+                "💼 <b>PORTFOLIO</b>\n\n"
+                "⚪ Nessuna posizione aperta"
             )
-        lines.append(f"\nPnL aperto totale: {total_pnl:+.2f} EUR")
+
+        lines = [
+            f"💼 <b>PORTFOLIO</b> [{len(self.risk.positions)}/{self.cfg.max_open_trades}]\n"
+        ]
+
+        total_pnl = 0.0
+
+        for pos in self.risk.positions.values():
+            price = self.last_prices.get(pos.symbol, pos.entry_price)
+
+            pnl = (price - pos.entry_price) * pos.amount
+            pnl_pct = (price - pos.entry_price) / pos.entry_price * 100.0
+
+            total_pnl += pnl
+
+            emoji = self.emoji_pnl(pnl)
+
+            lines.append(
+                f"{emoji} <b>{pos.symbol}</b>\n"
+                f"Entry: <code>{pos.entry_price:.6g}</code>\n"
+                f"Last: <code>{price:.6g}</code>\n"
+                f"PnL: <b>{pnl:+.2f} EUR ({pnl_pct:+.2f}%)</b>\n"
+                f"Qty: <code>{pos.amount:.6g}</code>\n"
+                f"SL: <code>{pos.stop_loss:.6g}</code>\n"
+                f"TS: <code>{pos.trailing_stop:.6g}</code>\n"
+                f"TP1 {'✅' if pos.tp1_done else '⬜'} | TP2 {'✅' if pos.tp2_done else '⬜'}\n"
+                f"Score: <b>{pos.score:.1f}</b>\n"
+            )
+
+        lines.append(
+            f"\n━━━━━━━━━━━━━━━━━━\n"
+            f"📈 Totale aperto: <b>{total_pnl:+.2f} EUR</b>"
+        )
+
         return "\n".join(lines)
 
     def cmd_status(self) -> str:
         fg = fetch_fear_greed()
+
         return (
-            "STATUS BOT\n"
-            f"Trading attivo: {self.trading_enabled}\n"
-            f"BTC regime: {'🟢 BULLISH' if self.btc_bullish else '🔴 BEARISH'}\n"
-            f"Dry run: {self.cfg.dry_run}\n"
-            f"Portfolio: {len(self.risk.positions)}/{self.cfg.max_open_trades}\n"
-            f"Score minimo buy: {self.cfg.buy_score_threshold:.0f}\n"
-            f"Volume minimo 24h: {self.cfg.min_24h_quote_volume_eur:,.0f} EUR\n"
-            f"RSI buy: {self.cfg.rsi_buy_min}-{self.cfg.rsi_buy_max} | exit: {self.cfg.rsi_exit}\n"
-            f"Momentum: {self.cfg.momentum_min*100:.1f}%-{self.cfg.momentum_max*100:.1f}%\n"
-            f"Volume spike: {self.cfg.volume_breakout_multiplier}x\n"
-            f"Fear & Greed: {fg if fg is not None else 'n/d'} "
-            f"(range: {self.cfg.fear_greed_min}-{self.cfg.fear_greed_max})\n"
-            f"Equity: {self.current_equity:.2f} EUR\n"
-            f"PnL giornaliero: {self.risk.daily_realized_pnl:.2f} EUR\n"
-            f"Drawdown: {self.risk.current_drawdown * 100:.2f}%\n"
-            f"Perdite consecutive: {self.risk.consecutive_losses}\n"
-            f"Pausa rischio: {self.risk.pause_minutes()} min\n"
-            f"Scan completati: {self.scan_count}\n"
-            f"Ultimo scan: {self.last_scan_end}\n"
-            f"Ultimo errore: {self.last_error}"
+            "🧠 <b>CRYPTO NO AUTO CHECK BOT</b>\n\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "📊 <b>MARKET</b>\n"
+            f"BTC Regime: <b>{self.emoji_market()}</b>\n"
+            f"Fear & Greed: <b>{fg if fg is not None else 'n/d'}</b>\n"
+            f"Trading: <b>{'🟢 ATTIVO' if self.trading_enabled else '🔴 PAUSA'}</b>\n\n"
+            "💼 <b>PORTFOLIO</b>\n"
+            f"Posizioni: <b>{len(self.risk.positions)}/{self.cfg.max_open_trades}</b>\n"
+            f"Equity: <b>{self.format_money(self.current_equity)}</b>\n"
+            f"PnL Day: <b>{self.format_money(self.risk.daily_realized_pnl)}</b>\n"
+            f"Drawdown: <b>{self.risk.current_drawdown * 100:.2f}%</b>\n\n"
+            "⚙️ <b>STRATEGY</b>\n"
+            f"Buy Score: <b>{self.cfg.buy_score_threshold:.0f}+</b>\n"
+            f"RSI Buy: <b>{self.cfg.rsi_buy_min}-{self.cfg.rsi_buy_max}</b>\n"
+            f"Momentum: <b>{self.cfg.momentum_min*100:.1f}% → {self.cfg.momentum_max*100:.1f}%</b>\n"
+            f"Volume Spike: <b>{self.cfg.volume_breakout_multiplier}x</b>\n\n"
+            "🛡️ <b>RISK</b>\n"
+            f"Loss Streak: <b>{self.risk.consecutive_losses}</b>\n"
+            f"Risk Pause: <b>{self.risk.pause_minutes()} min</b>\n"
+            f"Dry Run: <b>{self.cfg.dry_run}</b>\n\n"
+            "🖥️ <b>SYSTEM</b>\n"
+            f"Scan: <b>{self.scan_count}</b>\n"
+            f"Last Scan: <b>{self.last_scan_end}</b>\n"
+            f"Last Error: <code>{self.last_error}</code>"
         )
 
     def cmd_trades(self) -> str:
