@@ -1,3 +1,4 @@
+
 import json
 import logging
 import os
@@ -422,7 +423,7 @@ class Strategy:
             ema50 = float(row["ema50"])
             ema200 = float(row["ema200"])
             close  = float(row["close"])
-            bullish = ema20 > ema50 and ema50 > ema200 and close > ema200
+            bullish = ema20 > ema50 and ema50 > ema200
             desc = (
                 f"BTC EMA20={ema20:.2f} EMA50={ema50:.2f} EMA200={ema200:.2f} close={close:.2f}"
             )
@@ -1000,8 +1001,8 @@ class KrakenTradingBot:
             f"Volume minimo 24h: {self.cfg.min_24h_quote_volume_eur:,.0f} EUR\n"
             f"Allocazione: normal={self.cfg.alloc_normal*100:.0f}% | "
             f"high={self.cfg.alloc_high*100:.0f}% | extreme={self.cfg.alloc_extreme*100:.0f}%\n"
-            f"Sostituzione: score_diff>={self.cfg.replace_score_diff:.0f} | pnl<{self.cfg.replace_pnl_threshold:.0f}%\n"
-            f"Fear & Greed: {fg if fg is not None else 'n/d'} "
+            f"Sostituzione: score_diff&gt;={self.cfg.replace_score_diff:.0f} | pnl&lt;{self.cfg.replace_pnl_threshold:.0f}%\n"
+            f"Fear &amp; Greed: {fg if fg is not None else 'n/d'} "
             f"(range ok: {self.cfg.fear_greed_min}-{self.cfg.fear_greed_max})"
         )
         self.load_markets()
@@ -1053,12 +1054,12 @@ class KrakenTradingBot:
     def _fear_greed_ok(self) -> Tuple[bool, str]:
         fg = fetch_fear_greed()
         if fg is None:
-            return True, "F&G n/d (skip)"
+            return True, "F&amp;G n/d (skip)"
         if fg < self.cfg.fear_greed_min:
-            return False, f"Fear & Greed troppo basso ({fg} < {self.cfg.fear_greed_min})"
+            return False, f"Fear &amp; Greed troppo basso ({fg} &lt; {self.cfg.fear_greed_min})"
         if fg > self.cfg.fear_greed_max:
-            return False, f"Fear & Greed troppo alto ({fg} > {self.cfg.fear_greed_max})"
-        return True, f"F&G ok ({fg})"
+            return False, f"Fear &amp; Greed troppo alto ({fg} &gt; {self.cfg.fear_greed_max})"
+        return True, f"F&amp;G ok ({fg})"
 
     # ── BTC regime guard ─────────────────────────────────────────────────
     def _update_btc_regime(self) -> None:
@@ -1572,7 +1573,7 @@ class KrakenTradingBot:
         lines = [
             "📡 <b>TOP SIGNALS</b>\n",
             f"BTC: <b>{self.emoji_market()}</b>",
-            f"Fear & Greed: <b>{fg if fg is not None else 'n/d'}</b>",
+            f"Fear &amp; Greed: <b>{fg if fg is not None else 'n/d'}</b>",
             f"Portfolio: <b>{len(self.risk.positions)}/{self.cfg.max_open_trades}</b>",
             "━━━━━━━━━━━━━━━━━━",
         ]
@@ -1650,7 +1651,7 @@ class KrakenTradingBot:
             "━━━━━━━━━━━━━━━━━━\n"
             "📊 <b>MARKET</b>\n"
             f"BTC Regime: <b>{self.emoji_market()}</b>\n"
-            f"Fear & Greed: <b>{fg if fg is not None else 'n/d'}</b>\n"
+            f"Fear &amp; Greed: <b>{fg if fg is not None else 'n/d'}</b>\n"
             f"Trading: <b>{'🟢 ATTIVO' if self.trading_enabled else '🔴 PAUSA'}</b>\n\n"
             "💼 <b>PORTFOLIO</b>\n"
             f"Posizioni: <b>{len(self.risk.positions)}/{self.cfg.max_open_trades}</b>\n"
@@ -1698,7 +1699,7 @@ class KrakenTradingBot:
             f"BTC: {'🟢 BULLISH' if self.btc_bullish else '🔴 BEARISH'}\n"
             f"Coppie EUR filtrate: {len(self.symbols)}\n"
             f"Coin liquide ultimo scan: {self.liquid_count}\n"
-            f"Fear & Greed: {fg if fg is not None else 'n/d'}\n"
+            f"Fear &amp; Greed: {fg if fg is not None else 'n/d'}\n"
             f"Scan completati: {self.scan_count}"
         )
 
@@ -1745,7 +1746,7 @@ class KrakenTradingBot:
 
         fg = fetch_fear_greed()
         lines.append(
-            f"\nFEAR & GREED: {fg if fg is not None else 'n/d'} "
+            f"\nFEAR &amp; GREED: {fg if fg is not None else 'n/d'} "
             f"(range: {self.cfg.fear_greed_min}-{self.cfg.fear_greed_max})"
         )
         lines.append(f"BTC regime: {'BULLISH' if self.btc_bullish else 'BEARISH'}")
